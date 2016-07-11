@@ -1,0 +1,46 @@
+{
+	"name": "PlaybookRecord",
+	"type": "record",
+	"fields": [{
+		"name": "schema",
+		"type": "string"
+	}, {
+		"name": "data",
+		"type": {
+			"name": "DataRecord",
+			"type": "record",
+			"fields": [{
+				"name": "steps",
+				"type": {
+					"type": "array",
+					"items": {
+						"name": "StepsRecord",
+						"type": "record",
+						"fields": [{
+							"name": "name",
+							"type": "string"
+						}, {
+							"name": "type",
+							"type": "string"
+						}, {
+							"name": "actionOnFailure",
+							"type": "string"
+						}, {
+							"name": "jar",
+							"type": "string"
+						}, {
+							"name": "arguments",
+							"type": {
+								"type": "array",
+								"items": "string"
+							}
+						}]
+					}
+				}
+
+			}]
+
+		}
+
+	}]
+}
