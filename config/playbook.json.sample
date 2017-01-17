@@ -1,0 +1,38 @@
+{
+  "schema": "iglu:com.snowplowanalytics.dataflowrunner/PlaybookConfig/avro/1-0-0",
+  "data": {
+    "region": "us-east-1",
+    "credentials": {
+      "accessKeyId": "env",
+      "secretAccessKey": "env"
+    },
+    "steps": [
+      {
+        "type": "CUSTOM_JAR",
+        "name": "Combine Months",
+        "actionOnFailure": "CANCEL_AND_WAIT",
+        "jar": "/usr/share/aws/emr/s3-dist-cp/lib/s3-dist-cp.jar",
+        "arguments": [
+          "--src",
+          "s3n://my-output-bucket/enriched/bad/",
+          "--dest",
+          "hdfs:///local/monthly/"
+        ]
+      },
+      {
+        "type": "CUSTOM_JAR",
+        "name": "Combine Months",
+        "actionOnFailure": "CANCEL_AND_WAIT",
+        "jar": "s3://snowplow-hosted-assets/3-enrich/hadoop-event-recovery/snowplow-hadoop-event-recovery-0.2.0.jar",
+        "arguments": [
+          "com.snowplowanalytics.hadoop.scalding.SnowplowEventRecoveryJob",
+          "--hdfs",
+          "--input",
+          "hdfs:///local/monthly/*",
+          "--output",
+          "hdfs:///local/recovery/"
+        ]
+      }
+    ]
+  }
+}

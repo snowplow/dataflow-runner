@@ -24,7 +24,9 @@ _testmain.go
 *.prof
 
 # This project's binaries
-dataflow-runner
+build/
+dist/
 
 # Vagrant
 .vagrant/
+.release.yml.tmp
