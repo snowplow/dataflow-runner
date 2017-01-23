@@ -28,7 +28,7 @@ const (
 	APP_NAME       = "dataflow-runner"
 	APP_USAGE      = "Run templatable playbooks of Hadoop/Spark/et al jobs on Amazon EMR"
 	APP_COPYRIGHT  = "(c) 2016-2017 Snowplow Analytics, LTD"
-	CLI_VERSION    = "0.1.0"
+	CLI_VERSION    = "0.1.0-rc2"
 	VAR_DELIM      = ","
 	F_EMR_CONFIG   = "emr-config"
 	F_EMR_PLAYBOOK = "emr-playbook"
