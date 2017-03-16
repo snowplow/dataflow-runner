@@ -16,10 +16,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/elodina/go-avro"
 	"os"
 	"text/template"
 	"time"
+
+	"github.com/elodina/go-avro"
 )
 
 const (

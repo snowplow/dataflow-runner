@@ -15,13 +15,15 @@ package main
 
 import (
 	"errors"
+	"math/rand"
+	"strconv"
+	"strings"
+	"time"
+
 	log "github.com/Sirupsen/logrus"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/emr"
-	"math/rand"
-	"strconv"
-	"time"
 )
 
 const (
@@ -170,6 +172,11 @@ func (ec EmrCluster) GetJobFlowInput() (*emr.RunJobFlowInput, error) {
 		KeepJobFlowAliveWhenNoSteps: aws.Bool(true),
 	}
 
+	applications, err := ec.GetApplications()
+	if err != nil {
+		return nil, err
+	}
+
 	// RunJobFlowInput configs set
 	params := &emr.RunJobFlowInput{
 		Instances:         instances,
@@ -181,6 +188,7 @@ func (ec EmrCluster) GetJobFlowInput() (*emr.RunJobFlowInput, error) {
 		BootstrapActions:  ec.GetBootstrapActions(),
 		Configurations:    ec.GetConfigurations(),
 		VisibleToAllUsers: aws.Bool(true),
+		Applications:      applications,
 	}
 
 	// Check to see if version < 4.x
@@ -349,4 +357,31 @@ func (ec EmrCluster) GetConfigurations() []*emr.Configuration {
 	}
 
 	return emrConfigurationArr
+}
+
+// GetApplications builds the applications options
+func (ec EmrCluster) GetApplications() ([]*emr.Application, error) {
+	applications := ec.Config.Applications
+
+	var emrApplicationArr []*emr.Application
+	allowedApps := []string{"Hadoop", "Hive", "Mahout", "Pig", "Spark"}
+
+	if applications != nil && len(applications) > 0 {
+		emrApplicationArr = make([]*emr.Application, len(applications))
+
+		for i, application := range applications {
+			if StringInSlice(application, allowedApps) {
+				emrApplication := emr.Application{
+					Name: aws.String(application),
+				}
+
+				emrApplicationArr[i] = &emrApplication
+			} else {
+				return nil, errors.New("Only " + strings.Join(allowedApps, ", ") +
+					" are allowed applications")
+			}
+		}
+	}
+
+	return emrApplicationArr, nil
 }

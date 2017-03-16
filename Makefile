@@ -12,8 +12,8 @@ depend_log    = $(build_dir)/.depend
 build_log     = $(build_dir)/.build
 merge_log     = $(build_dir)/.merge
 
-cluster_avsc_link  = "https://raw.githubusercontent.com/snowplow/iglu-central/master/schemas/com.snowplowanalytics.dataflowrunner/ClusterConfig/avro/1-0-0"
-playbook_avsc_link = "https://raw.githubusercontent.com/snowplow/iglu-central/master/schemas/com.snowplowanalytics.dataflowrunner/PlaybookConfig/avro/1-0-0"
+cluster_avsc_link  = "http://iglucentral.com/schemas/com.snowplowanalytics.dataflowrunner/ClusterConfig/avro/1-1-0"
+playbook_avsc_link = "http://iglucentral.com/schemas/com.snowplowanalytics.dataflowrunner/PlaybookConfig/avro/1-0-0"
 
 tools_dir     = $(build_dir)/tools
 codegen_link  = "https://raw.githubusercontent.com/elodina/go-avro/master/codegen/codegen.go"
@@ -27,7 +27,7 @@ coverage_dir  = $(build_dir)/coverage
 coverage_out  = $(coverage_dir)/coverage.out
 coverage_html = $(coverage_dir)/coverage.html
 
-generated_dir = $(build_dir)/generated
+generated_dir    = $(build_dir)/generated
 generated_schema = $(generated_dir)/schema_generated.go
 generated_data   = $(generated_dir)/data_generated.go
 

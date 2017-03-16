@@ -14,15 +14,19 @@
 package main
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/emr"
+	"github.com/stretchr/testify/assert"
 )
+
+var CR, _ = InitConfigResolver()
 
 func TestGetJobFlowInput_Success(t *testing.T) {
 	assert := assert.New(t)
-	ar, _ := InitConfigResolver()
 
-	record, _ := ar.ParseClusterRecord([]byte(ClusterRecord2), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord2), nil)
 
 	// Master, Core and Task Instances
 	record.Ec2.Instances.Core.Count = 1
@@ -101,13 +105,11 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 
 func TestGetJobFlowInput_Fail(t *testing.T) {
 	assert := assert.New(t)
-	ar, _ := InitConfigResolver()
 
-	record, _ := ar.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+
+	// fails if GetLocation fails
 	ec := InitEmrCluster(*record)
-
-	assert.NotNil(ec)
-
 	res, err := ec.GetJobFlowInput()
 	assert.Nil(res)
 	assert.NotNil(err)
@@ -115,21 +117,23 @@ func TestGetJobFlowInput_Fail(t *testing.T) {
 
 	record.Ec2.Location.Vpc = nil
 	record.Ec2.Location.Classic = nil
-
 	ec = InitEmrCluster(*record)
-	assert.NotNil(ec)
-
 	res, err = ec.GetJobFlowInput()
 	assert.Nil(res)
 	assert.NotNil(err)
 	assert.Equal("At least one of Availability Zone and Subnet id is required", err.Error())
+
+	// fails if GetApplications fails
+	record, _ = CR.ParseClusterRecord([]byte(ClusterRecord2), nil)
+	record.Applications = []string{"Snowplow"}
+	ec, _ = InitEmrCluster(*record)
+
 }
 
 func TestTerminateJobFlows_Fail(t *testing.T) {
 	assert := assert.New(t)
-	ar, _ := InitConfigResolver()
 
-	record, _ := ar.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
 	ec := InitEmrCluster(*record)
 
 	assert.NotNil(ec)
@@ -149,9 +153,8 @@ func TestTerminateJobFlows_Fail(t *testing.T) {
 
 func TestRunJobFlow_Fail(t *testing.T) {
 	assert := assert.New(t)
-	ar, _ := InitConfigResolver()
 
-	record, _ := ar.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
 	ec := InitEmrCluster(*record)
 
 	assert.NotNil(ec)
@@ -177,4 +180,86 @@ func TestRunJobFlow_Fail(t *testing.T) {
 	assert.Equal("", jID)
 	assert.NotNil(err)
 	assert.Equal("access-key and secret-key must both be set to 'env', or neither", err.Error())
+}
+
+func TestGetTags_NoTags(t *testing.T) {
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	ec := InitEmrCluster(*record)
+	assert.Nil(t, ec.GetTags())
+}
+
+func TestGetTags_WithTags(t *testing.T) {
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithTags), nil)
+	ec := InitEmrCluster(*record)
+	tags := ec.GetTags()
+	assert.Len(t, tags, 1)
+	expected := &emr.Tag{
+		Key:   aws.String("hello"),
+		Value: aws.String("world"),
+	}
+	assert.Equal(t, expected, tags[0])
+}
+
+func TestGetBootstrapActions_NoActions(t *testing.T) {
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	ec := InitEmrCluster(*record)
+	assert.Nil(t, ec.GetBootstrapActions())
+}
+
+func TestGetBootstrapActions_WithActions(t *testing.T) {
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithActions), nil)
+	ec := InitEmrCluster(*record)
+	actions := ec.GetBootstrapActions()
+	assert.Len(t, actions, 1)
+	expected := &emr.BootstrapActionConfig{
+		Name: aws.String("Bootstrap Action"),
+		ScriptBootstrapAction: &emr.ScriptBootstrapActionConfig{
+			Path: aws.String("s3://snowplow/script.sh"),
+			Args: []*string{aws.String("1.5")},
+		},
+	}
+	assert.Equal(t, expected, actions[0])
+}
+
+func TestGetConfigurations_NoConfigs(t *testing.T) {
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	ec := InitEmrCluster(*record)
+	assert.Nil(t, ec.GetConfigurations())
+}
+
+func TestGetConfigurations_WithConfigs(t *testing.T) {
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithConfigs), nil)
+	ec := InitEmrCluster(*record)
+	configs := ec.GetConfigurations()
+	assert.Len(t, configs, 1)
+	expected := &emr.Configuration{
+		Classification: aws.String("c"),
+		Properties:     map[string]*string{"key": aws.String("value")},
+	}
+	assert.Equal(t, expected, configs[0])
+}
+
+func TestGetApplications_NoApps(t *testing.T) {
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	ec := InitEmrCluster(*record)
+	apps, err := ec.GetApplications()
+	assert.Nil(t, apps)
+	assert.Nil(t, err)
+}
+
+func TestGetApplications_WithApps(t *testing.T) {
+	assert := assert.New(t)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithApps), nil)
+	ec := InitEmrCluster(*record)
+	apps, _ := ec.GetApplications()
+	assert.Len(apps, 2)
+	assert.Equal(aws.String("Hadoop"), apps[0].Name)
+	assert.Equal(aws.String("Spark"), apps[1].Name)
+
+	// fails is the app is not allowed
+	record.Applications = []string{"Snowplow"}
+	ec, _ = InitEmrCluster(*record)
+	_, err := ec.GetApplications()
+	assert.NotNil(err)
+	assert.Equal("Only Hadoop, Hive, Mahout, Pig, Spark are allowed applications", err.Error())
 }
