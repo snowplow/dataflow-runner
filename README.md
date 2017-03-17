@@ -6,9 +6,9 @@
 
 Run templatable playbooks of Hadoop/Spark/et al jobs on Amazon EMR.
 
-|  **[Devops Guide] [devops-guide]**     | **[Analysts Guide] [analysts-guide]**     | **[Developers Guide] [developers-guide]**     |
+|  **[Devops Guide][devops-guide]**     | **[Analysts Guide][analysts-guide]**     | **[Developers Guide][developers-guide]**     |
 |:--------------------------------------:|:-----------------------------------------:|:---------------------------------------------:|
-|  [![i1] [devops-image]] [devops-guide] | [![i2] [analysts-image]] [analysts-guide] | [![i3] [developers-image]] [developers-guide] |
+|  [![i1][devops-image]][devops-guide] | [![i2][analysts-image]][analysts-guide] | [![i3][developers-image]][developers-guide] |
 
 ## Quickstart
 
@@ -24,7 +24,7 @@ host> ./dataflow-runner --help
 
 Dataflow Runner is copyright 2016-2017 Snowplow Analytics Ltd.
 
-Licensed under the **[Apache License, Version 2.0] [license]** (the "License");
+Licensed under the **[Apache License, Version 2.0][license]** (the "License");
 you may not use this software except in compliance with the License.
 
 Unless required by applicable law or agreed to in writing, software
