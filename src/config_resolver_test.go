@@ -14,11 +14,12 @@
 package main
 
 import (
-	"github.com/stretchr/testify/assert"
 	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // --- Tests
@@ -90,7 +91,7 @@ func TestParseClusterRecord_Fail(t *testing.T) {
 	res, err = ar.ParseClusterRecord([]byte(`{"schema":{},"data":"iglu:com.snowplowanalytics.dataflow-runner/Cluster/avro/1-0-0"}`), nil)
 	assert.Nil(res)
 	assert.NotNil(err)
-	assert.Equal("json: cannot unmarshal object into Go value of type string", err.Error())
+	assert.Equal("json: cannot unmarshal object into Go struct field SelfDescribingRecord.Schema of type string", err.Error())
 
 	res, err = ar.ParseClusterRecordFromFile("cluster_record.json", nil)
 	assert.Nil(res)
@@ -141,7 +142,7 @@ func TestParsePlaybookRecord_Fail(t *testing.T) {
 	res, err = ar.ParsePlaybookRecord([]byte(`{"schema":{},"data":"iglu:com.snowplowanalytics.dataflow-runner/Cluster/avro/1-0-0"}`), nil)
 	assert.Nil(res)
 	assert.NotNil(err)
-	assert.Equal("json: cannot unmarshal object into Go value of type string", err.Error())
+	assert.Equal("json: cannot unmarshal object into Go struct field SelfDescribingRecord.Schema of type string", err.Error())
 
 	res, err = ar.ParsePlaybookRecordFromFile("playbook_record.json", nil)
 	assert.Nil(res)

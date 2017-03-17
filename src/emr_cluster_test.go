@@ -100,7 +100,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	ec = InitEmrCluster(*record)
 	_, err := ec.GetJobFlowInput()
 
-	assert.Equal("strconv.ParseInt: parsing \"h\": invalid syntax", err.Error())
+	assert.Equal("strconv.Atoi: parsing \"h\": invalid syntax", err.Error())
 }
 
 func TestGetJobFlowInput_Fail(t *testing.T) {
