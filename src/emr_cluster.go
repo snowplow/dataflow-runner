@@ -257,6 +257,16 @@ func (ec EmrCluster) GetInstanceGroups() []*emr.InstanceGroupConfig {
 		instanceGroups[2].Market = aws.String("SPOT")
 	}
 
+	if instances.Master.EbsConfiguration != nil {
+		instanceGroups[0].EbsConfiguration = GetEbsConfiguration(instances.Master.EbsConfiguration)
+	}
+	if instances.Core.EbsConfiguration != nil {
+		instanceGroups[1].EbsConfiguration = GetEbsConfiguration(instances.Core.EbsConfiguration)
+	}
+	if instances.Task.EbsConfiguration != nil {
+		instanceGroups[2].EbsConfiguration = GetEbsConfiguration(instances.Task.EbsConfiguration)
+	}
+
 	if instances.Task.Count > 0 && instances.Core.Count <= 0 {
 		// Removing core config when there are no such instances
 		instanceGroups = append(instanceGroups[0:1], instanceGroups[2])
@@ -269,6 +279,37 @@ func (ec EmrCluster) GetInstanceGroups() []*emr.InstanceGroupConfig {
 	}
 
 	return instanceGroups
+}
+
+// GetEbsConfiguration turns a EbsConfigurationRecord into an emr.EbsConfiguration
+func GetEbsConfiguration(c *EbsConfigurationRecord) *emr.EbsConfiguration {
+	configs := c.EbsBlockDeviceConfigs
+
+	var emrConfigsArr []*emr.EbsBlockDeviceConfig
+
+	if configs != nil && len(configs) > 0 {
+		emrConfigsArr = make([]*emr.EbsBlockDeviceConfig, len(configs))
+
+		for i, config := range configs {
+			emrVolumeSpec := emr.VolumeSpecification{
+				Iops:       aws.Int64(config.VolumeSpecification.Iops),
+				SizeInGB:   aws.Int64(config.VolumeSpecification.SizeInGB),
+				VolumeType: aws.String(config.VolumeSpecification.VolumeType),
+			}
+
+			emrConfig := emr.EbsBlockDeviceConfig{
+				VolumesPerInstance:  aws.Int64(config.VolumesPerInstance),
+				VolumeSpecification: &emrVolumeSpec,
+			}
+
+			emrConfigsArr[i] = &emrConfig
+		}
+	}
+
+	return &emr.EbsConfiguration{
+		EbsBlockDeviceConfigs: emrConfigsArr,
+		EbsOptimized:          aws.Bool(c.EbsOptimized),
+	}
 }
 
 // GetAmiVersionMajor returns the major AmiVersion

@@ -22,7 +22,20 @@
       },
       "instances": {
         "master": {
-          "type": "m1.medium"
+          "type": "m1.medium",
+          "ebsConfiguration": {
+            "ebsOptimized": true,
+            "ebsBlockDeviceConfigs": [
+              {
+                "volumesPerInstance": 12,
+                "volumeSpecification": {
+                  "iops": 8,
+                  "sizeInGB": 10,
+                  "volumeType": "gp2"
+                }
+              }
+            ]
+          }
         },
         "core": {
           "type": "m1.medium",

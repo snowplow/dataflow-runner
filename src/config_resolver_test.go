@@ -53,7 +53,7 @@ func TestParseClusterRecord_Success(t *testing.T) {
 	assert.Equal("c3.4xlarge", res.Ec2.Instances.Core.Type)
 	assert.Equal(int64(3), res.Ec2.Instances.Core.Count)
 	assert.Equal("m1.medium", res.Ec2.Instances.Task.Type)
-	assert.Equal(int64(0), res.Ec2.Instances.Task.Count)
+	assert.Equal(int64(1), res.Ec2.Instances.Task.Count)
 	assert.Equal("0.015", res.Ec2.Instances.Task.Bid)
 
 	res, err = ar.ParseClusterRecord([]byte(ClusterRecord2), nil)
