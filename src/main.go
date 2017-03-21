@@ -17,11 +17,14 @@ package main
 
 import (
 	"errors"
-	log "github.com/Sirupsen/logrus"
-	"gopkg.in/urfave/cli.v1"
 	"os"
 	"strings"
 	"time"
+
+	"fmt"
+
+	log "github.com/Sirupsen/logrus"
+	"gopkg.in/urfave/cli.v1"
 )
 
 const (
@@ -35,12 +38,22 @@ const (
 	fEmrCluster  = "emr-cluster"
 	fVars        = "vars"
 	fAsync       = "async"
+	fLogLevel    = "log-level"
 )
 
 func main() {
 	app := cli.NewApp()
 
-	SetLogLevel()
+	var logLevel string
+	logLevels := map[string]log.Level{
+		"debug":   log.DebugLevel,
+		"info":    log.InfoLevel,
+		"warning": log.WarnLevel,
+		"error":   log.ErrorLevel,
+		"fatal":   log.FatalLevel,
+		"panic":   log.PanicLevel,
+	}
+	logLevelKeys := getLogLevelKeys(logLevels)
 
 	app.Name = appName
 	app.Usage = appUsage
@@ -53,11 +66,33 @@ func main() {
 			Email: "support@snowplowanalytics.com",
 		},
 	}
+	app.Flags = []cli.Flag{
+		cli.StringFlag{
+			Name:  fLogLevel,
+			Value: "info",
+			Usage: fmt.Sprintf("logging level, possible values are %s",
+				strings.Join(logLevelKeys, ",")),
+			Destination: &logLevel,
+		},
+	}
+	app.Action = func(c *cli.Context) error {
+		if level, ok := logLevels[logLevel]; ok {
+			log.SetLevel(level)
+		} else {
+			return fmt.Errorf("Supported log levels are %s, provided %s",
+				strings.Join(logLevelKeys, ","), logLevel)
+		}
+		cli.ShowAppHelp(c)
+		return nil
+	}
 	app.Commands = []cli.Command{
 		{
 			Name:  "up",
 			Usage: "Launches a new EMR cluster",
-			Flags: []cli.Flag{getEmrConfigFlag(), getVarsFlag()},
+			Flags: []cli.Flag{
+				getEmrConfigFlag(),
+				getVarsFlag(),
+			},
 			Action: func(c *cli.Context) error {
 				jobflowID, err := up(
 					c.String(fEmrConfig),
@@ -72,7 +107,12 @@ func main() {
 		{
 			Name:  "run",
 			Usage: "Adds jobflow steps to a running EMR cluster",
-			Flags: []cli.Flag{getEmrPlaybookFlag(), getEmrClusterFlag(), getAsyncFlag(), getVarsFlag()},
+			Flags: []cli.Flag{
+				getEmrPlaybookFlag(),
+				getEmrClusterFlag(),
+				getAsyncFlag(),
+				getVarsFlag(),
+			},
 			Action: func(c *cli.Context) error {
 				err := run(
 					c.String(fEmrPlaybook),
@@ -89,7 +129,11 @@ func main() {
 		{
 			Name:  "down",
 			Usage: "Terminates a running EMR cluster",
-			Flags: []cli.Flag{getEmrConfigFlag(), getEmrClusterFlag(), getVarsFlag()},
+			Flags: []cli.Flag{
+				getEmrConfigFlag(),
+				getEmrClusterFlag(),
+				getVarsFlag(),
+			},
 			Action: func(c *cli.Context) error {
 				err := down(
 					c.String(fEmrConfig),
@@ -105,7 +149,11 @@ func main() {
 		{
 			Name:  "run-transient",
 			Usage: "Launches, runs and then terminates an EMR cluster",
-			Flags: []cli.Flag{getEmrConfigFlag(), getEmrPlaybookFlag(), getVarsFlag()},
+			Flags: []cli.Flag{
+				getEmrConfigFlag(),
+				getEmrPlaybookFlag(),
+				getVarsFlag(),
+			},
 			Action: func(c *cli.Context) error {
 				emrConfig := c.String(fEmrConfig)
 				emrPlaybook := c.String(fEmrPlaybook)
@@ -282,4 +330,12 @@ func checkErr(err error) {
 	if err != nil {
 		log.Fatal(err.Error())
 	}
+}
+
+func getLogLevelKeys(logLevels map[string]log.Level) []string {
+	keys := make([]string, 0, len(logLevels))
+	for k := range logLevels {
+		keys = append(keys, k)
+	}
+	return keys
 }

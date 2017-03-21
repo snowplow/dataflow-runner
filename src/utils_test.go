@@ -14,17 +14,10 @@
 package main
 
 import (
-	log "github.com/Sirupsen/logrus"
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
-
-func TestSetLogLevel(t *testing.T) {
-	assert := assert.New(t)
-
-	SetLogLevel()
-	assert.Equal(log.DebugLevel, log.GetLevel())
-}
 
 func TestGetCredentialsProvider(t *testing.T) {
 	assert := assert.New(t)

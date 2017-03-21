@@ -16,10 +16,10 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	log "github.com/Sirupsen/logrus"
+	"io/ioutil"
+
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds"
-	"io/ioutil"
 )
 
 // GetCredentialsProvider attempts to fetch credentials from either:
@@ -70,11 +70,6 @@ func InterfaceToJSONString(m interface{}, pretty bool) string {
 		return string(b)
 	}
 	return "{}"
-}
-
-// SetLogLevel sets the global log level
-func SetLogLevel() {
-	log.SetLevel(log.DebugLevel)
 }
 
 // StringInSlice checks whether or not a string is in an array
