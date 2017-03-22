@@ -15,13 +15,15 @@ package main
 
 import (
 	"errors"
+	"strconv"
+	"strings"
+	"time"
+
 	log "github.com/Sirupsen/logrus"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/emr"
-	"strconv"
-	"strings"
-	"time"
+	"github.com/aws/aws-sdk-go/service/emr/emriface"
 )
 
 // JobFlowSteps is used for adding steps to an existing cluster
@@ -29,15 +31,28 @@ type JobFlowSteps struct {
 	Config     PlaybookConfig
 	JobflowID  string
 	IsBlocking bool
+	Svc        emriface.EMRAPI
 }
 
 // InitJobFlowSteps creates a new JobFlowSteps instance
-func InitJobFlowSteps(playbookConfig PlaybookConfig, jobflowID string, isAsync bool) *JobFlowSteps {
+func InitJobFlowSteps(playbookConfig PlaybookConfig, jobflowID string, isAsync bool) (*JobFlowSteps, error) {
+	creds, err := GetCredentialsProvider(
+		playbookConfig.Credentials.AccessKeyId, playbookConfig.Credentials.SecretAccessKey)
+	if err != nil {
+		return nil, err
+	}
+
+	svc := emr.New(session.New(), &aws.Config{
+		Region:      aws.String(playbookConfig.Region),
+		Credentials: creds,
+	})
+
 	return &JobFlowSteps{
 		Config:     playbookConfig,
 		JobflowID:  jobflowID,
 		IsBlocking: !isAsync,
-	}
+		Svc:        svc,
+	}, nil
 }
 
 // AddJobFlowSteps builds the parameters and then submits them to
@@ -48,18 +63,11 @@ func (jfs JobFlowSteps) AddJobFlowSteps() error {
 		return err
 	}
 
-	creds, err := GetCredentialsProvider(jfs.Config.Credentials.AccessKeyId, jfs.Config.Credentials.SecretAccessKey)
-	if err != nil {
-		return err
-	}
-
 	done := false
 	successCount := 0
 	errorCount := 0
 
-	svc := emr.New(session.New(), &aws.Config{Region: aws.String(jfs.Config.Region), Credentials: creds})
-
-	resp, err := svc.AddJobFlowSteps(params)
+	resp, err := jfs.Svc.AddJobFlowSteps(params)
 	if err != nil {
 		return err
 	}
@@ -74,17 +82,17 @@ func (jfs JobFlowSteps) AddJobFlowSteps() error {
 				StepId:    stepID,
 			}
 
-			req, resp1 := svc.DescribeStepRequest(params1)
-			err1 := req.Send()
+			resp1, err := jfs.Svc.DescribeStep(params1)
+			if err != nil {
+				return err
+			}
 
-			if err1 == nil {
-				if *resp1.Step.Status.State == "COMPLETED" {
-					log.Info("Step '" + *resp1.Step.Name + "' with id '" + *resp1.Step.Id + "' completed successfully")
-					successCount++
-				} else if *resp1.Step.Status.State == "CANCELLED" || *resp1.Step.Status.State == "FAILED" {
-					log.Error("Step '" + *resp1.Step.Name + "' with id '" + *resp1.Step.Id + "' was " + *resp1.Step.Status.State)
-					errorCount++
-				}
+			if *resp1.Step.Status.State == "COMPLETED" {
+				log.Info("Step '" + *resp1.Step.Name + "' with id '" + *resp1.Step.Id + "' completed successfully")
+				successCount++
+			} else if *resp1.Step.Status.State == "CANCELLED" || *resp1.Step.Status.State == "FAILED" {
+				log.Error("Step '" + *resp1.Step.Name + "' with id '" + *resp1.Step.Id + "' was " + *resp1.Step.Status.State)
+				errorCount++
 			}
 		}
 

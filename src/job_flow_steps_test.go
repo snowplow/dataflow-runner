@@ -14,16 +14,127 @@
 package main
 
 import (
-	"github.com/stretchr/testify/assert"
+	"errors"
 	"testing"
+
+	"strings"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/emr"
+	"github.com/stretchr/testify/assert"
 )
+
+func (m *mockEmrClient) AddJobFlowSteps(input *emr.AddJobFlowStepsInput) (*emr.AddJobFlowStepsOutput, error) {
+	if !strings.HasPrefix(*input.JobFlowId, "j-") {
+		return nil, errors.New("AddJobFlowSteps failed")
+	}
+	return &emr.AddJobFlowStepsOutput{
+		StepIds: []*string{aws.String("1")},
+	}, nil
+}
+
+// Mock using the cluster id of input to set the step State
+// ClusterId = "j-PENDING" will result in a step with the PENDING state
+func (m *mockEmrClient) DescribeStep(input *emr.DescribeStepInput) (*emr.DescribeStepOutput, error) {
+	if !strings.HasPrefix(*input.ClusterId, "j-") {
+		return nil, errors.New("DescribeStep failed")
+	}
+	var state string
+	var states = []string{"PENDING", "CANCEL_PENDING", "RUNNING", "COMPLETED", "CANCELLED",
+		"FAILED", "INTERRUPTED"}
+	for _, e := range states {
+		if strings.Contains(*input.ClusterId, e) {
+			state = e
+			break
+		}
+	}
+	if state == "" {
+		return nil, errors.New("DescribeStep failed")
+	}
+	return &emr.DescribeStepOutput{
+		Step: &emr.Step{
+			Name: aws.String("step"),
+			Id:   aws.String("s-id"),
+			Status: &emr.StepStatus{
+				State: aws.String(state),
+			},
+		},
+	}, nil
+}
+
+func mockJobFlowSteps(playbookConfig PlaybookConfig, jobflowID string) *JobFlowSteps {
+	return &JobFlowSteps{
+		Config:     playbookConfig,
+		JobflowID:  jobflowID,
+		IsBlocking: true,
+		Svc:        &mockEmrClient{},
+	}
+}
+
+func TestInitJobFlowSteps(t *testing.T) {
+	assert := assert.New(t)
+
+	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
+
+	jfs, _ := InitJobFlowSteps(*record, "j-id", true)
+	assert.NotNil(jfs)
+
+	record.Credentials.SecretAccessKey = "hello"
+	_, err := InitJobFlowSteps(*record, "j-id", true)
+	assert.NotNil(err)
+	assert.Equal("access-key and secret-key must both be set to 'env', or neither", err.Error())
+
+	record.Credentials.AccessKeyId = "iam"
+	_, err = InitJobFlowSteps(*record, "j-id", true)
+	assert.NotNil(err)
+	assert.Equal("access-key and secret-key must both be set to 'iam', or neither", err.Error())
+
+	record.Credentials.SecretAccessKey = "iam"
+	jfs, _ = InitJobFlowSteps(*record, "j-id", true)
+	assert.NotNil(jfs)
+}
+
+func TestAddJobFlowSteps_Fail(t *testing.T) {
+	assert := assert.New(t)
+	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
+	jfs := mockJobFlowSteps(*record, "id")
+
+	// fails if emr.AddJobFlowSteps fails
+	err := jfs.AddJobFlowSteps()
+	assert.NotNil(err)
+	assert.Equal("AddJobFlowSteps failed", err.Error())
+
+	// fails if DescribeStep fails
+	jfs.JobflowID = "j-123"
+	err = jfs.AddJobFlowSteps()
+	assert.NotNil(err)
+	assert.Equal("DescribeStep failed", err.Error())
+
+	// fails if the number of errors is > 0
+	jfs.JobflowID = "j-FAILED"
+	err = jfs.AddJobFlowSteps()
+	assert.NotNil(err)
+	assert.Equal("1/1 steps failed to complete successfully", err.Error())
+
+	// fails if GetJobFlowStepsInput fails
+	jfs.Config.Steps = []*StepsRecord{}
+	err = jfs.AddJobFlowSteps()
+	assert.NotNil(err)
+	assert.Equal("No steps found in config, nothing to add", err.Error())
+}
+
+func TestAddJobFlowSteps_Success(t *testing.T) {
+	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
+	jfs := mockJobFlowSteps(*record, "j-COMPLETED")
+	err := jfs.AddJobFlowSteps()
+	assert.Nil(t, err)
+}
 
 func TestGetJobFlowStepsInput_Success(t *testing.T) {
 	assert := assert.New(t)
-	ar, _ := InitConfigResolver()
 
-	record, _ := ar.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
-	jfs := InitJobFlowSteps(*record, "jobflow-id", true)
+	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
+	jfs, _ := InitJobFlowSteps(*record, "jobflow-id", true)
 
 	assert.NotNil(jfs)
 
@@ -36,10 +147,9 @@ func TestGetJobFlowStepsInput_Success(t *testing.T) {
 
 func TestGetJobFlowStepsInput_Fail(t *testing.T) {
 	assert := assert.New(t)
-	ar, _ := InitConfigResolver()
 
-	record, _ := ar.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
-	jfs := InitJobFlowSteps(*record, "jobflow-id", true)
+	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
+	jfs, _ := InitJobFlowSteps(*record, "jobflow-id", true)
 
 	assert.NotNil(jfs)
 
@@ -54,35 +164,6 @@ func TestGetJobFlowStepsInput_Fail(t *testing.T) {
 
 	res, err = jfs.GetJobFlowStepsInput()
 	assert.Nil(res)
-	assert.NotNil(err)
-	assert.Equal("No steps found in config, nothing to add", err.Error())
-}
-
-func TestAddJobFlowSteps_Fail(t *testing.T) {
-	assert := assert.New(t)
-	ar, _ := InitConfigResolver()
-
-	record, _ := ar.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
-	jfs := InitJobFlowSteps(*record, "jobflow-id", true)
-
-	assert.NotNil(jfs)
-
-	err := jfs.AddJobFlowSteps()
-
-	assert.NotNil(err)
-	assert.Equal("EnvAccessKeyNotFound: AWS_ACCESS_KEY_ID or AWS_ACCESS_KEY not found in environment", err.Error())
-
-	jfs.Config.Credentials.SecretAccessKey = "hello"
-
-	err = jfs.AddJobFlowSteps()
-
-	assert.NotNil(err)
-	assert.Equal("access-key and secret-key must both be set to 'env', or neither", err.Error())
-
-	jfs.Config.Steps = []*StepsRecord{}
-
-	err = jfs.AddJobFlowSteps()
-
 	assert.NotNil(err)
 	assert.Equal("No steps found in config, nothing to add", err.Error())
 }

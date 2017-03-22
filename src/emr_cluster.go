@@ -24,56 +24,63 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/emr"
+	"github.com/aws/aws-sdk-go/service/emr/emriface"
 )
 
 const (
-	invalidStateSleepSeconds = 30
+	invalidStateSleepSeconds     = 30
+	bootstrapFailureSleepSeconds = 300
 )
 
 // EmrCluster is used for starting and terminating clusters
 type EmrCluster struct {
 	Config ClusterConfig
+	Svc    emriface.EMRAPI
 }
 
 // InitEmrCluster creates a new EmrCluster instance
-func InitEmrCluster(clusterRecord ClusterConfig) *EmrCluster {
-	return &EmrCluster{
-		Config: clusterRecord,
+func InitEmrCluster(clusterConfig ClusterConfig) (*EmrCluster, error) {
+	creds, err := GetCredentialsProvider(
+		clusterConfig.Credentials.AccessKeyId, clusterConfig.Credentials.SecretAccessKey)
+	if err != nil {
+		return nil, err
 	}
+
+	svc := emr.New(session.New(), &aws.Config{
+		Region:      aws.String(clusterConfig.Region),
+		Credentials: creds,
+	})
+	return &EmrCluster{
+		Config: clusterConfig,
+		Svc:    svc,
+	}, nil
 }
 
-// TerminateJobFlows attempts to terminate a running cluster
-func (ec EmrCluster) TerminateJobFlows(jobflowID string) error {
-	creds, err := GetCredentialsProvider(ec.Config.Credentials.AccessKeyId, ec.Config.Credentials.SecretAccessKey)
-	if err != nil {
-		return err
-	}
-
-	svc := emr.New(session.New(), &aws.Config{Region: aws.String(ec.Config.Region), Credentials: creds})
-
+// TerminateJobFlow attempts to terminate a running cluster
+func (ec EmrCluster) TerminateJobFlow(jobflowID string) error {
 	terminateJobFlowsInput := emr.TerminateJobFlowsInput{
 		JobFlowIds: []*string{aws.String(jobflowID)},
 	}
 
-	_, err = svc.TerminateJobFlows(&terminateJobFlowsInput)
+	_, err := ec.Svc.TerminateJobFlows(&terminateJobFlowsInput)
 	if err != nil {
 		return err
 	}
 
 	log.Info("Terminating EMR cluster with jobflow id '" + jobflowID + "'...")
 
-	_, err = ec.waitForState(svc, jobflowID, "TERMINATED", []string{"TERMINATED_WITH_ERRORS", "TERMINATED"})
+	_, err = ec.waitForState(jobflowID, "TERMINATED",
+		[]string{"TERMINATED_WITH_ERRORS", "TERMINATED"})
 	return err
 }
 
 // RunJobFlow builds the params config and launches an EMR cluster
 func (ec EmrCluster) RunJobFlow() (string, error) {
-	params, err := ec.GetJobFlowInput()
-	if err != nil {
-		return "", err
-	}
+	return ec.runJobFlow(bootstrapFailureSleepSeconds)
+}
 
-	creds, err := GetCredentialsProvider(ec.Config.Credentials.AccessKeyId, ec.Config.Credentials.SecretAccessKey)
+func (ec EmrCluster) runJobFlow(sleepTime int) (string, error) {
+	params, err := ec.GetJobFlowInput()
 	if err != nil {
 		return "", err
 	}
@@ -83,17 +90,16 @@ func (ec EmrCluster) RunJobFlow() (string, error) {
 	var clusterState string
 	var jobflowID string
 
-	svc := emr.New(session.New(), &aws.Config{Region: aws.String(ec.Config.Region), Credentials: creds})
-
 	for done == false && retry > 0 {
-		resp, err := svc.RunJobFlow(params)
+		resp, err := ec.Svc.RunJobFlow(params)
 		if err != nil {
 			return "", err
 		}
 
 		log.Info("Launching EMR cluster with name '" + ec.Config.Name + "'...")
 
-		clusterStatus, err := ec.waitForState(svc, *resp.JobFlowId, "WAITING", []string{"TERMINATED_WITH_ERRORS", "TERMINATED", "TERMINATING", "WAITING"})
+		clusterStatus, err := ec.waitForState(*resp.JobFlowId, "WAITING",
+			[]string{"TERMINATED_WITH_ERRORS", "TERMINATED", "TERMINATING", "WAITING"})
 		if err != nil {
 			return "", err
 		}
@@ -104,7 +110,7 @@ func (ec EmrCluster) RunJobFlow() (string, error) {
 
 			retry--
 
-			timeout := rand.Intn(300)
+			timeout := rand.Intn(sleepTime)
 			log.Error("Bootstrap failure detected, retrying in " + strconv.Itoa(timeout) + " seconds...")
 			time.Sleep(time.Second * time.Duration(timeout))
 		} else {
@@ -127,10 +133,10 @@ func (ec EmrCluster) RunJobFlow() (string, error) {
 
 // waitForState blocks waiting for the EMR cluster to enter a certain state or
 // a failure exit state
-func (ec EmrCluster) waitForState(svc *emr.EMR, jobflowID string, neededState string, exitStates []string) (*emr.ClusterStatus, error) {
+func (ec EmrCluster) waitForState(jobflowID string, neededState string, exitStates []string) (*emr.ClusterStatus, error) {
 	cluster := &emr.DescribeClusterInput{ClusterId: aws.String(jobflowID)}
 
-	resp, err := svc.DescribeCluster(cluster)
+	resp, err := ec.Svc.DescribeCluster(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +146,7 @@ func (ec EmrCluster) waitForState(svc *emr.EMR, jobflowID string, neededState st
 
 		time.Sleep(time.Second * invalidStateSleepSeconds)
 
-		resp, err = svc.DescribeCluster(cluster)
+		resp, err = ec.Svc.DescribeCluster(cluster)
 		if err != nil {
 			return nil, err
 		}

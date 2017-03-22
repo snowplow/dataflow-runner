@@ -14,14 +14,179 @@
 package main
 
 import (
+	"strings"
 	"testing"
+
+	"errors"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/emr"
+	"github.com/aws/aws-sdk-go/service/emr/emriface"
 	"github.com/stretchr/testify/assert"
 )
 
+type mockEmrClient struct {
+	emriface.EMRAPI
+}
+
+func (m *mockEmrClient) TerminateJobFlows(input *emr.TerminateJobFlowsInput) (*emr.TerminateJobFlowsOutput, error) {
+	if !strings.HasPrefix(*input.JobFlowIds[0], "j-") {
+		return nil, errors.New("TerminateJobFlows failed")
+	}
+	return &emr.TerminateJobFlowsOutput{}, nil
+}
+
+// Mock using the cluster id of input to set the cluster state
+// ClusterId = "j-STARTING" will result in a cluster with the STARTING state
+func (m *mockEmrClient) DescribeCluster(input *emr.DescribeClusterInput) (*emr.DescribeClusterOutput, error) {
+	if !strings.HasPrefix(*input.ClusterId, "j-") {
+		return nil, errors.New("DescribeCluster failed")
+	}
+	var state string
+	var states = []string{"STARTING", "BOOTSTRAPPING", "RUNNING", "WAITING", "TERMINATING",
+		"TERMINATED", "TERMINATED_WITH_ERRORS"}
+	for _, e := range states {
+		if strings.Contains(*input.ClusterId, e) {
+			state = e
+			break
+		}
+	}
+	if state == "" {
+		return nil, errors.New("DescribeCluster failed")
+	}
+	if state == "TERMINATED" {
+		return &emr.DescribeClusterOutput{
+			Cluster: &emr.Cluster{
+				Status: &emr.ClusterStatus{
+					State: aws.String(state),
+					StateChangeReason: &emr.ClusterStateChangeReason{
+						Code: aws.String("BOOTSTRAP_FAILURE"),
+					},
+				},
+			},
+		}, nil
+	}
+	return &emr.DescribeClusterOutput{
+		Cluster: &emr.Cluster{
+			Status: &emr.ClusterStatus{
+				State: aws.String(state),
+			},
+		},
+	}, nil
+}
+
+func (m *mockEmrClient) RunJobFlow(input *emr.RunJobFlowInput) (*emr.RunJobFlowOutput, error) {
+	if *input.Name == "fail" {
+		return nil, errors.New("RunJobFlow failed")
+	}
+	return &emr.RunJobFlowOutput{
+		JobFlowId: aws.String("j-" + *input.Name),
+	}, nil
+}
+
+func mockEmrCluster(clusterRecord ClusterConfig) *EmrCluster {
+	return &EmrCluster{
+		Config: clusterRecord,
+		Svc:    &mockEmrClient{},
+	}
+}
+
 var CR, _ = InitConfigResolver()
+
+func TestInitEmrCluster(t *testing.T) {
+	assert := assert.New(t)
+
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+
+	ec, _ := InitEmrCluster(*record)
+	assert.NotNil(ec)
+
+	record.Credentials.SecretAccessKey = "hello"
+	_, err := InitEmrCluster(*record)
+	assert.NotNil(err)
+	assert.Equal("access-key and secret-key must both be set to 'env', or neither", err.Error())
+
+	record, _ = CR.ParseClusterRecord([]byte(ClusterRecord2), nil)
+
+	ec, _ = InitEmrCluster(*record)
+	assert.NotNil(ec)
+
+	record.Credentials.SecretAccessKey = "hello"
+	_, err = InitEmrCluster(*record)
+	assert.NotNil(err)
+	assert.Equal("access-key and secret-key must both be set to 'iam', or neither", err.Error())
+}
+
+func TestTerminateJobFlow_Fail(t *testing.T) {
+	assert := assert.New(t)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	ec := mockEmrCluster(*record)
+
+	// fails if TerminateJobFlows fails
+	err := ec.TerminateJobFlow("hello")
+	assert.NotNil(err)
+	assert.Equal("TerminateJobFlows failed", err.Error())
+
+	// fails if DescribeCluster fails
+	err = ec.TerminateJobFlow("j-123")
+	assert.NotNil(err)
+	assert.Equal("DescribeCluster failed", err.Error())
+}
+
+func TestTerminateJobFlow_Success(t *testing.T) {
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	ec := mockEmrCluster(*record)
+	err := ec.TerminateJobFlow("j-TERMINATED")
+	assert.Nil(t, err)
+}
+
+func TestRunJobFlow_Fail(t *testing.T) {
+	assert := assert.New(t)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+
+	// fails if GetJobFlowInput fails
+	ec := mockEmrCluster(*record)
+	_, err := ec.runJobFlow(3)
+	assert.NotNil(err)
+	assert.Equal("Only one of Availability Zone and Subnet id should be provided", err.Error())
+
+	// fails if emr.RunJobFlow fails
+	record.Name = "fail"
+	record.Ec2.Location.Vpc = nil
+	ec = mockEmrCluster(*record)
+	_, err = ec.runJobFlow(3)
+	assert.NotNil(err)
+	assert.Equal("RunJobFlow failed", err.Error())
+
+	// fails if DescribeCluster fails
+	record.Name = "123"
+	ec = mockEmrCluster(*record)
+	_, err = ec.runJobFlow(3)
+	assert.NotNil(err)
+	assert.Equal("DescribeCluster failed", err.Error())
+
+	// fails if 3 or more retries
+	record.Name = "TERMINATED"
+	ec = mockEmrCluster(*record)
+	_, err = ec.runJobFlow(3)
+	assert.NotNil(err)
+	assert.Equal("could not start the cluster due to bootstrap failure", err.Error())
+
+	// fails if the cluster state is not WAITING
+	record.Name = "TERMINATING"
+	ec = mockEmrCluster(*record)
+	_, err = ec.runJobFlow(3)
+	assert.NotNil(err)
+	assert.Equal("EMR cluster failed to launch with state TERMINATING", err.Error())
+}
+
+func TestRunJobFlow_Success(t *testing.T) {
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord2), nil)
+	record.Name = "WAITING"
+	ec := mockEmrCluster(*record)
+	id, _ := ec.runJobFlow(3)
+	assert.Equal(t, "j-WAITING", id)
+}
 
 func TestGetJobFlowInput_Success(t *testing.T) {
 	assert := assert.New(t)
@@ -32,7 +197,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.Instances.Core.Count = 1
 	record.Ec2.Instances.Task.Count = 1
 
-	ec := InitEmrCluster(*record)
+	ec, _ := InitEmrCluster(*record)
 	res, _ := ec.GetJobFlowInput()
 
 	assert.Equal(3, len(res.Instances.InstanceGroups))
@@ -41,7 +206,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.Instances.Core.Count = 0
 	record.Ec2.Instances.Task.Count = 1
 
-	ec = InitEmrCluster(*record)
+	ec, _ = InitEmrCluster(*record)
 	res, _ = ec.GetJobFlowInput()
 
 	assert.Equal(2, len(res.Instances.InstanceGroups))
@@ -50,7 +215,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.Instances.Core.Count = 1
 	record.Ec2.Instances.Task.Count = 0
 
-	ec = InitEmrCluster(*record)
+	ec, _ = InitEmrCluster(*record)
 	res, _ = ec.GetJobFlowInput()
 
 	assert.Equal(2, len(res.Instances.InstanceGroups))
@@ -59,7 +224,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.Instances.Core.Count = 0
 	record.Ec2.Instances.Task.Count = 0
 
-	ec = InitEmrCluster(*record)
+	ec, _ = InitEmrCluster(*record)
 	res, _ = ec.GetJobFlowInput()
 
 	assert.Equal(1, len(res.Instances.InstanceGroups))
@@ -69,7 +234,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.Location.Vpc = nil
 	record.Ec2.Location.Classic = &ClassicRecord{AvailabilityZone: "us-east-1a"}
 
-	ec = InitEmrCluster(*record)
+	ec, _ = InitEmrCluster(*record)
 	res, _ = ec.GetJobFlowInput()
 
 	assert.Equal("us-east-1a", *res.Instances.Placement.AvailabilityZone)
@@ -79,7 +244,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 
 	record.Ec2.AmiVersion = "3.0.0"
 
-	ec = InitEmrCluster(*record)
+	ec, _ = InitEmrCluster(*record)
 	res, _ = ec.GetJobFlowInput()
 
 	assert.Equal("3.0.0", *res.AmiVersion)
@@ -88,7 +253,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 
 	record.Ec2.AmiVersion = "4.5.0"
 
-	ec = InitEmrCluster(*record)
+	ec, _ = InitEmrCluster(*record)
 	res, _ = ec.GetJobFlowInput()
 
 	assert.Equal("emr-4.5.0", *res.ReleaseLabel)
@@ -97,7 +262,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 
 	record.Ec2.AmiVersion = "hello"
 
-	ec = InitEmrCluster(*record)
+	ec, _ = InitEmrCluster(*record)
 	_, err := ec.GetJobFlowInput()
 
 	assert.Equal("strconv.Atoi: parsing \"h\": invalid syntax", err.Error())
@@ -109,7 +274,7 @@ func TestGetJobFlowInput_Fail(t *testing.T) {
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
 
 	// fails if GetLocation fails
-	ec := InitEmrCluster(*record)
+	ec, _ := InitEmrCluster(*record)
 	res, err := ec.GetJobFlowInput()
 	assert.Nil(res)
 	assert.NotNil(err)
@@ -117,7 +282,7 @@ func TestGetJobFlowInput_Fail(t *testing.T) {
 
 	record.Ec2.Location.Vpc = nil
 	record.Ec2.Location.Classic = nil
-	ec = InitEmrCluster(*record)
+	ec, _ = InitEmrCluster(*record)
 	res, err = ec.GetJobFlowInput()
 	assert.Nil(res)
 	assert.NotNil(err)
@@ -130,63 +295,11 @@ func TestGetJobFlowInput_Fail(t *testing.T) {
 
 }
 
-func TestTerminateJobFlows_Fail(t *testing.T) {
-	assert := assert.New(t)
-
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
-	ec := InitEmrCluster(*record)
-
-	assert.NotNil(ec)
-
-	err := ec.TerminateJobFlows("hello")
-
-	assert.NotNil(err)
-	assert.Equal("EnvAccessKeyNotFound: AWS_ACCESS_KEY_ID or AWS_ACCESS_KEY not found in environment", err.Error())
-
-	ec.Config.Credentials.SecretAccessKey = "hello"
-
-	err = ec.TerminateJobFlows("hello")
-
-	assert.NotNil(err)
-	assert.Equal("access-key and secret-key must both be set to 'env', or neither", err.Error())
-}
-
-func TestRunJobFlow_Fail(t *testing.T) {
-	assert := assert.New(t)
-
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
-	ec := InitEmrCluster(*record)
-
-	assert.NotNil(ec)
-
-	jID, err := ec.RunJobFlow()
-
-	assert.Equal("", jID)
-	assert.NotNil(err)
-	assert.Equal("Only one of Availability Zone and Subnet id should be provided", err.Error())
-
-	ec.Config.Ec2.Location.Classic = nil
-
-	jID, err = ec.RunJobFlow()
-
-	assert.Equal("", jID)
-	assert.NotNil(err)
-	assert.Equal("EnvAccessKeyNotFound: AWS_ACCESS_KEY_ID or AWS_ACCESS_KEY not found in environment", err.Error())
-
-	ec.Config.Credentials.SecretAccessKey = "hello"
-
-	jID, err = ec.RunJobFlow()
-
-	assert.Equal("", jID)
-	assert.NotNil(err)
-	assert.Equal("access-key and secret-key must both be set to 'env', or neither", err.Error())
-}
-
 func TestGetInstanceGroups_NoEBS(t *testing.T) {
 	assert := assert.New(t)
 
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
-	ec := InitEmrCluster(*record)
+	ec, _ := InitEmrCluster(*record)
 	groups := ec.GetInstanceGroups()
 	assert.Len(groups, 3)
 	expected := []*emr.InstanceGroupConfig{
@@ -217,7 +330,7 @@ func TestGetInstanceGroups_WithEBS(t *testing.T) {
 	assert := assert.New(t)
 
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithEBS), nil)
-	ec := InitEmrCluster(*record)
+	ec, _ := InitEmrCluster(*record)
 	groups := ec.GetInstanceGroups()
 	assert.Len(groups, 3)
 	expected := []*emr.InstanceGroupConfig{
@@ -285,13 +398,13 @@ func TestGetInstanceGroups_WithEBS(t *testing.T) {
 
 func TestGetTags_NoTags(t *testing.T) {
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
-	ec := InitEmrCluster(*record)
+	ec, _ := InitEmrCluster(*record)
 	assert.Nil(t, ec.GetTags())
 }
 
 func TestGetTags_WithTags(t *testing.T) {
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithTags), nil)
-	ec := InitEmrCluster(*record)
+	ec, _ := InitEmrCluster(*record)
 	tags := ec.GetTags()
 	assert.Len(t, tags, 1)
 	expected := &emr.Tag{
@@ -303,13 +416,13 @@ func TestGetTags_WithTags(t *testing.T) {
 
 func TestGetBootstrapActions_NoActions(t *testing.T) {
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
-	ec := InitEmrCluster(*record)
+	ec, _ := InitEmrCluster(*record)
 	assert.Nil(t, ec.GetBootstrapActions())
 }
 
 func TestGetBootstrapActions_WithActions(t *testing.T) {
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithActions), nil)
-	ec := InitEmrCluster(*record)
+	ec, _ := InitEmrCluster(*record)
 	actions := ec.GetBootstrapActions()
 	assert.Len(t, actions, 1)
 	expected := &emr.BootstrapActionConfig{
@@ -324,13 +437,13 @@ func TestGetBootstrapActions_WithActions(t *testing.T) {
 
 func TestGetConfigurations_NoConfigs(t *testing.T) {
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
-	ec := InitEmrCluster(*record)
+	ec, _ := InitEmrCluster(*record)
 	assert.Nil(t, ec.GetConfigurations())
 }
 
 func TestGetConfigurations_WithConfigs(t *testing.T) {
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithConfigs), nil)
-	ec := InitEmrCluster(*record)
+	ec, _ := InitEmrCluster(*record)
 	configs := ec.GetConfigurations()
 	assert.Len(t, configs, 1)
 	expected := &emr.Configuration{
@@ -342,7 +455,7 @@ func TestGetConfigurations_WithConfigs(t *testing.T) {
 
 func TestGetApplications_NoApps(t *testing.T) {
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
-	ec := InitEmrCluster(*record)
+	ec, _ := InitEmrCluster(*record)
 	apps, err := ec.GetApplications()
 	assert.Nil(t, apps)
 	assert.Nil(t, err)
@@ -351,7 +464,7 @@ func TestGetApplications_NoApps(t *testing.T) {
 func TestGetApplications_WithApps(t *testing.T) {
 	assert := assert.New(t)
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithApps), nil)
-	ec := InitEmrCluster(*record)
+	ec, _ := InitEmrCluster(*record)
 	apps, _ := ec.GetApplications()
 	assert.Len(apps, 2)
 	assert.Equal(aws.String("Hadoop"), apps[0].Name)
@@ -363,4 +476,41 @@ func TestGetApplications_WithApps(t *testing.T) {
 	_, err := ec.GetApplications()
 	assert.NotNil(err)
 	assert.Equal("Only Hadoop, Hive, Mahout, Pig, Spark are allowed applications", err.Error())
+}
+
+func TestGetLocation_Fail(t *testing.T) {
+	assert := assert.New(t)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	ec, _ := InitEmrCluster(*record)
+
+	_, _, err := ec.GetLocation()
+	assert.NotNil(err)
+	assert.Equal("Only one of Availability Zone and Subnet id should be provided", err.Error())
+
+	record.Ec2.Location.Classic = nil
+	record.Ec2.Location.Vpc = nil
+	_, _, err = ec.GetLocation()
+	assert.NotNil(err)
+	assert.Equal("At least one of Availability Zone and Subnet id is required", err.Error())
+}
+
+func TestGetLocation_Success(t *testing.T) {
+	assert := assert.New(t)
+
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord2), nil)
+	ec, _ := InitEmrCluster(*record)
+
+	s, p, err := ec.GetLocation()
+	assert.Nil(err)
+	assert.Equal(s, "subnet-123456")
+	assert.Equal(p, "")
+
+	record.Ec2.Location.Classic = &ClassicRecord{
+		AvailabilityZone: "eu-central-1",
+	}
+	record.Ec2.Location.Vpc = nil
+	s, p, err = ec.GetLocation()
+	assert.Nil(err)
+	assert.Equal(s, "")
+	assert.Equal(p, "eu-central-1")
 }

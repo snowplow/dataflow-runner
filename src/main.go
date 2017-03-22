@@ -231,7 +231,10 @@ func up(emrConfig string, vars string) (string, error) {
 		return "", err
 	}
 
-	ec := InitEmrCluster(*clusterRecord)
+	ec, err := InitEmrCluster(*clusterRecord)
+	if err != nil {
+		return "", err
+	}
 	jobflowID, err := ec.RunJobFlow()
 	if err != nil {
 		return "", err
@@ -261,7 +264,10 @@ func run(emrPlaybook string, emrCluster string, async bool, vars string) error {
 		return err
 	}
 
-	jfs := InitJobFlowSteps(*playbookRecord, emrCluster, async)
+	jfs, err := InitJobFlowSteps(*playbookRecord, emrCluster, async)
+	if err != nil {
+		return err
+	}
 	return jfs.AddJobFlowSteps()
 }
 
@@ -286,8 +292,11 @@ func down(emrConfig string, emrCluster string, vars string) error {
 		return err
 	}
 
-	ec := InitEmrCluster(*clusterRecord)
-	return ec.TerminateJobFlows(emrCluster)
+	ec, err := InitEmrCluster(*clusterRecord)
+	if err != nil {
+		return err
+	}
+	return ec.TerminateJobFlow(emrCluster)
 }
 
 // --- Helpers
