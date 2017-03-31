@@ -15,8 +15,8 @@ Run templatable playbooks of Hadoop/Spark/et al jobs on Amazon EMR.
 Assuming you are running on 64bit Linux:
 
 ```bash
-host> wget http://dl.bintray.com/snowplow/snowplow-generic/dataflow_runner_0.1.0_linux_amd64.zip
-host> unzip dataflow_runner_0.1.0_linux_amd64.zip
+host> wget http://dl.bintray.com/snowplow/snowplow-generic/dataflow_runner_0.2.0_linux_amd64.zip
+host> unzip dataflow_runner_0.2.0_linux_amd64.zip
 host> ./dataflow-runner --help
 ```
 
@@ -36,7 +36,7 @@ limitations under the License.
 [travis]: https://travis-ci.org/snowplow/dataflow-runner
 [travis-image]: https://travis-ci.org/snowplow/dataflow-runner.png?branch=master
 
-[release-image]: http://img.shields.io/badge/release-0.1.0-6ad7e5.svg?style=flat
+[release-image]: http://img.shields.io/badge/release-0.2.0-6ad7e5.svg?style=flat
 [releases]: https://github.com/snowplow/dataflow-runner/releases
 
 [license-image]: http://img.shields.io/badge/license-Apache--2-blue.svg?style=flat
