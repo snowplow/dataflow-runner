@@ -207,7 +207,10 @@ func toSelfDescribingRecord(jsonBytes []byte, variables map[string]interface{}) 
 
 // templateRawBytes runs the raw config through the golang templater
 func templateRawBytes(rawBytes []byte, variables map[string]interface{}) ([]byte, error) {
-	t, err := template.New("playbook").Funcs(templFuncs).Parse(string(rawBytes))
+	t, err := template.New("playbook").
+		Funcs(templFuncs).
+		Option("missingkey=error").
+		Parse(string(rawBytes))
 	if err != nil {
 		return nil, err
 	}
