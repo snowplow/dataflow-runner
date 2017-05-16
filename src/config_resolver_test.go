@@ -186,4 +186,13 @@ func TestTemplateRawBytes(t *testing.T) {
 	assert.Nil(templatedByteArr)
 	assert.NotNil(err)
 	assert.Equal("template: playbook:1: function \"systemEnvs\" not defined", err.Error())
+
+	byteArr = []byte(`{"key":"{{ .someOtherVar}}"}`)
+	templateByteArr, err := templateRawBytes(byteArr, varMap)
+
+	assert.Nil(templateByteArr)
+	assert.NotNil(err)
+	assert.Equal(
+		"template: playbook:1:11: executing \"playbook\" at <.someOtherVar>: map has no entry for key \"someOtherVar\"",
+		err.Error())
 }
