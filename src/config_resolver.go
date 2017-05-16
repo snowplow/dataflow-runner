@@ -15,7 +15,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"io/ioutil"
 	"os"
 	"strconv"
 	"text/template"
@@ -43,6 +45,16 @@ var (
 		},
 		"systemEnv": func(env string) string {
 			return os.Getenv(env)
+		},
+		"base64": func(src string) string {
+			return base64.StdEncoding.EncodeToString([]byte(src))
+		},
+		"base64File": func(filename string) (string, error) {
+			content, err := ioutil.ReadFile(filename)
+			if err != nil {
+				return "", err
+			}
+			return base64.StdEncoding.EncodeToString(content), nil
 		},
 	}
 )
