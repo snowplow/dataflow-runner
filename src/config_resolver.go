@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"strconv"
 	"text/template"
 	"time"
 
@@ -32,6 +33,13 @@ var (
 	templFuncs = template.FuncMap{
 		"nowWithFormat": func(format string) string {
 			return time.Now().Format(format)
+		},
+		"timeWithFormat": func(epoch, format string) (string, error) {
+			e, err := strconv.ParseInt(epoch, 10, 64)
+			if err != nil {
+				return "", err
+			}
+			return time.Unix(e, 0).Format(format), nil
 		},
 		"systemEnv": func(env string) string {
 			return os.Getenv(env)
