@@ -14,6 +14,7 @@
 package main
 
 import (
+	"io/ioutil"
 	"os"
 	"strconv"
 	"testing"
@@ -210,6 +211,41 @@ func TestTemplateRawBytes_systemEnv(t *testing.T) {
 	assert.NotNil(t, templatedByteArr)
 	assert.Nil(t, err)
 	assert.Equal(t, `{"key":"golangTestEnvVar"}`, string(templatedByteArr))
+}
+
+func TestTemplateRawBytes_base64(t *testing.T) {
+	byteArr := []byte(`{"key":"{{base64 "abc"}}"}`)
+	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
+	assert.NotNil(t, templatedByteArr)
+	assert.Nil(t, err)
+	assert.Equal(t, `{"key":"YWJj"}`, string(templatedByteArr))
+}
+
+func TestTemplateRawBytes_base64File(t *testing.T) {
+	assert := assert.New(t)
+
+	content := []byte("abc")
+	tmpFile, err := ioutil.TempFile("", "base64File")
+	assert.Nil(err)
+	defer os.Remove(tmpFile.Name())
+	_, err = tmpFile.Write(content)
+	assert.Nil(err)
+	err = tmpFile.Close()
+	assert.Nil(err)
+
+	byteArr := []byte(`{"key":"{{base64File "` + tmpFile.Name() + `"}}"}`)
+	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
+	assert.NotNil(templatedByteArr)
+	assert.Nil(err)
+	assert.Equal(`{"key":"YWJj"}`, string(templatedByteArr))
+
+	byteArr = []byte(`{"key":"{{base64File "/tmp/doesnt/exist"}}"}`)
+	templatedByteArr, err = templateRawBytes(byteArr, map[string]interface{}{})
+	assert.NotNil(err)
+	assert.Nil(templatedByteArr)
+	assert.Equal(
+		`template: playbook:1:10: executing "playbook" at <base64File "/tmp/doe...>: error calling base64File: open /tmp/doesnt/exist: no such file or directory`,
+		err.Error())
 }
 
 func TestTemplateRawBytes_doesntExist(t *testing.T) {
