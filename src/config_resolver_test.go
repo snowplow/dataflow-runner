@@ -164,35 +164,58 @@ func TestToSelfDescribingRecord(t *testing.T) {
 func TestTemplateRawBytes(t *testing.T) {
 	assert := assert.New(t)
 
-	err := os.Setenv("TEST_ENV_VAR", "golangTestEnvVar")
-	assert.Nil(err)
-
 	varMap := map[string]interface{}{
 		"someVar": "golangTestVar",
 	}
 
-	byteArr := []byte(`{"key":"{{systemEnv "TEST_ENV_VAR"}}","key2":"{{ .someVar}}","key3":"{{nowWithFormat "2006"}}"}`)
+	byteArr := []byte(`{"key":"{{.someVar}}"}`)
 	templatedByteArr, err := templateRawBytes(byteArr, varMap)
-
-	currYear := strconv.Itoa(time.Now().Year())
-
 	assert.NotNil(templatedByteArr)
 	assert.Nil(err)
-	assert.Equal(`{"key":"golangTestEnvVar","key2":"golangTestVar","key3":"`+currYear+`"}`, string(templatedByteArr))
+	assert.Equal(`{"key":"golangTestVar"}`, string(templatedByteArr))
 
-	byteArr = []byte(`{"key":"{{systemEnvs "TEST_ENV_VAR"}}"}`)
-	templatedByteArr, err = templateRawBytes(byteArr, varMap)
-
-	assert.Nil(templatedByteArr)
-	assert.NotNil(err)
-	assert.Equal("template: playbook:1: function \"systemEnvs\" not defined", err.Error())
-
-	byteArr = []byte(`{"key":"{{ .someOtherVar}}"}`)
+	byteArr = []byte(`{"key":"{{.someOtherVar}}"}`)
 	templateByteArr, err := templateRawBytes(byteArr, varMap)
-
 	assert.Nil(templateByteArr)
 	assert.NotNil(err)
 	assert.Equal(
-		"template: playbook:1:11: executing \"playbook\" at <.someOtherVar>: map has no entry for key \"someOtherVar\"",
+		"template: playbook:1:10: executing \"playbook\" at <.someOtherVar>: map has no entry for key \"someOtherVar\"",
 		err.Error())
+}
+
+func TestTemplateRawBytes_nowWithFormat(t *testing.T) {
+	currYear := strconv.Itoa(time.Now().Year())
+
+	byteArr := []byte(`{"key":"{{nowWithFormat "2006"}}"}`)
+	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
+	assert.NotNil(t, templatedByteArr)
+	assert.Nil(t, err)
+	assert.Equal(t, `{"key":"`+currYear+`"}`, string(templatedByteArr))
+}
+
+func TestTemplateRawBytes_timeWithFormat(t *testing.T) {
+	byteArr := []byte(`{"key":"{{timeWithFormat 1494930397 "2006"}}"}`)
+	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
+	assert.NotNil(t, templatedByteArr)
+	assert.Nil(t, err)
+	assert.Equal(t, `{"key":"2017"}`, string(templatedByteArr))
+}
+
+func TestTemplateRawBytes_systemEnv(t *testing.T) {
+	err := os.Setenv("TEST_ENV_VAR", "golangTestEnvVar")
+	assert.Nil(t, err)
+
+	byteArr := []byte(`{"key":"{{systemEnv "TEST_ENV_VAR"}}"}`)
+	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
+	assert.NotNil(t, templatedByteArr)
+	assert.Nil(t, err)
+	assert.Equal(t, `{"key":"golangTestEnvVar"}`, string(templatedByteArr))
+}
+
+func TestTemplateRawBytes_doesntExist(t *testing.T) {
+	byteArr := []byte(`{"key":"{{doesntExist "TEST_ENV_VAR"}}"}`)
+	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
+	assert.Nil(t, templatedByteArr)
+	assert.NotNil(t, err)
+	assert.Equal(t, "template: playbook:1: function \"doesntExist\" not defined", err.Error())
 }

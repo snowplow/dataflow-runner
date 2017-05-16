@@ -33,6 +33,9 @@ var (
 		"nowWithFormat": func(format string) string {
 			return time.Now().Format(format)
 		},
+		"timeWithFormat": func(epoch int64, format string) string {
+			return time.Unix(epoch, 0).Format(format)
+		},
 		"systemEnv": func(env string) string {
 			return os.Getenv(env)
 		},
