@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"strconv"
@@ -43,8 +44,12 @@ var (
 			}
 			return time.Unix(e, 0).Format(format), nil
 		},
-		"systemEnv": func(env string) string {
-			return os.Getenv(env)
+		"systemEnv": func(env string) (string, error) {
+			val, ok := os.LookupEnv(env)
+			if !ok {
+				return "", fmt.Errorf("environment variable %s not set", env)
+			}
+			return val, nil
 		},
 		"base64": func(src string) string {
 			return base64.StdEncoding.EncodeToString([]byte(src))
