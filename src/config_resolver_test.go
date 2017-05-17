@@ -213,14 +213,24 @@ func TestTemplateRawBytes_timeWithFormat(t *testing.T) {
 }
 
 func TestTemplateRawBytes_systemEnv(t *testing.T) {
+	assert := assert.New(t)
+
 	err := os.Setenv("TEST_ENV_VAR", "golangTestEnvVar")
-	assert.Nil(t, err)
+	assert.Nil(err)
 
 	byteArr := []byte(`{"key":"{{systemEnv "TEST_ENV_VAR"}}"}`)
 	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
-	assert.NotNil(t, templatedByteArr)
-	assert.Nil(t, err)
-	assert.Equal(t, `{"key":"golangTestEnvVar"}`, string(templatedByteArr))
+	assert.NotNil(templatedByteArr)
+	assert.Nil(err)
+	assert.Equal(`{"key":"golangTestEnvVar"}`, string(templatedByteArr))
+
+	byteArr = []byte(`{"key":"{{systemEnv "DOESNT_EXIST"}}"}`)
+	templatedByteArr, err = templateRawBytes(byteArr, map[string]interface{}{})
+	assert.NotNil(err)
+	assert.Nil(templatedByteArr)
+	assert.Equal(
+		`template: playbook:1:10: executing "playbook" at <systemEnv "DOESNT_EX...>: error calling systemEnv: environment variable DOESNT_EXIST not set`,
+		err.Error())
 }
 
 func TestTemplateRawBytes_base64(t *testing.T) {
