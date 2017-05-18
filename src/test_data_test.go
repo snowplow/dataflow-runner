@@ -409,6 +409,12 @@ var PlaybookRecord1 = `{
           "hdfs:///local/recovery/"
         ]
       }
+    ],
+    "tags": [
+      {
+        "key": "hello",
+        "value": "world"
+      }
     ]
   }
 }`

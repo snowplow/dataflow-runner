@@ -109,6 +109,7 @@ func TestParsePlaybookRecord_Success(t *testing.T) {
 	assert.NotNil(res)
 	assert.Nil(err)
 	assert.Equal(2, len(res.Steps))
+	assert.Equal([]*TagsRecord{&TagsRecord{Key: "hello", Value: "world"}}, res.Tags)
 
 	for index, step := range res.Steps {
 		if index == 0 {
