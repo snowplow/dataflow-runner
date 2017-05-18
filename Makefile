@@ -13,7 +13,7 @@ build_log     = $(build_dir)/.build
 merge_log     = $(build_dir)/.merge
 
 cluster_avsc_link  = "http://iglucentral.com/schemas/com.snowplowanalytics.dataflowrunner/ClusterConfig/avro/1-1-0"
-playbook_avsc_link = "http://iglucentral.com/schemas/com.snowplowanalytics.dataflowrunner/PlaybookConfig/avro/1-0-0"
+playbook_avsc_link = "https://raw.githubusercontent.com/snowplow/iglu-central/feature/df-runner-0.3/schemas/com.snowplowanalytics.dataflowrunner/PlaybookConfig/avro/1-0-1"
 
 tools_dir     = $(build_dir)/tools
 codegen_link  = "https://raw.githubusercontent.com/elodina/go-avro/master/codegen/codegen.go"
