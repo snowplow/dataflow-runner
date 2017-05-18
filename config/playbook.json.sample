@@ -1,5 +1,5 @@
 {
-  "schema": "iglu:com.snowplowanalytics.dataflowrunner/PlaybookConfig/avro/1-0-0",
+  "schema": "iglu:com.snowplowanalytics.dataflowrunner/PlaybookConfig/avro/1-0-1",
   "data": {
     "region": "us-east-1",
     "credentials": {
@@ -32,6 +32,12 @@
           "--output",
           "hdfs:///local/recovery/"
         ]
+      }
+    ],
+    "tags": [
+      {
+        "key": "hello",
+        "value": "world"
       }
     ]
   }
