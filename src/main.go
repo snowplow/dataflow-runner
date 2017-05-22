@@ -39,6 +39,9 @@ const (
 	fVars        = "vars"
 	fAsync       = "async"
 	fLogLevel    = "log-level"
+	fLock        = "lock"
+	fSoftLock    = "softLock"
+	fConsul      = "consul"
 )
 
 func main() {
@@ -111,6 +114,9 @@ func main() {
 				getEmrPlaybookFlag(),
 				getEmrClusterFlag(),
 				getAsyncFlag(),
+				getLockFlag(),
+				getSoftLockFlag(),
+				getConsulFlag(),
 				getVarsFlag(),
 			},
 			Action: func(c *cli.Context) error {
@@ -118,6 +124,9 @@ func main() {
 					c.String(fEmrPlaybook),
 					c.String(fEmrCluster),
 					c.Bool(fAsync),
+					c.String(fLock),
+					c.String(fSoftLock),
+					c.String(fConsul),
 					c.String(fVars),
 				)
 				checkErr(err)
@@ -152,6 +161,9 @@ func main() {
 			Flags: []cli.Flag{
 				getEmrConfigFlag(),
 				getEmrPlaybookFlag(),
+				getLockFlag(),
+				getSoftLockFlag(),
+				getConsulFlag(),
 				getVarsFlag(),
 			},
 			Action: func(c *cli.Context) error {
@@ -163,7 +175,10 @@ func main() {
 				checkErr(err1)
 				log.Info("EMR cluster launched successfully; Jobflow ID: " + jobflowID)
 
-				err2 := run(emrPlaybook, jobflowID, false, vars)
+				lock := c.String(fLock)
+				softLock := c.String(fSoftLock)
+				consul := c.String(fConsul)
+				err2 := run(emrPlaybook, jobflowID, false, lock, softLock, consul, vars)
 				if err2 != nil {
 					log.Error(err2.Error())
 				} else {
@@ -211,6 +226,32 @@ func getAsyncFlag() cli.BoolFlag {
 	return cli.BoolFlag{Name: fAsync, Usage: "Asynchronous execution of the jobflow steps"}
 }
 
+func getLockFlag() cli.StringFlag {
+	usage := "Path to the lock held for the duration of the jobflow steps. This is materialized" +
+		" by a file or a KV entry in Consul depending on the --" + fConsul + "flag."
+	return cli.StringFlag{
+		Name:  fLock,
+		Usage: usage,
+	}
+}
+
+func getSoftLockFlag() cli.StringFlag {
+	usage := "Path to the lock held for the duration of the jobflow steps. This is materialized" +
+		" by a file or a KV entry in Consul depending on the --" + fConsul + "flag. Released no" +
+		" matter if the operation failed or succeeded."
+	return cli.StringFlag{
+		Name:  fSoftLock,
+		Usage: usage,
+	}
+}
+
+func getConsulFlag() cli.StringFlag {
+	return cli.StringFlag{
+		Name:  fConsul,
+		Usage: "Address of the Consul server used for distributed locking for the duration of the jobflow steps",
+	}
+}
+
 // --- Commands
 
 // up launches a new EMR cluster
@@ -244,12 +285,23 @@ func up(emrConfig string, vars string) (string, error) {
 }
 
 // run adds steps to an EMR cluster
-func run(emrPlaybook string, emrCluster string, async bool, vars string) error {
+func run(emrPlaybook, emrCluster string, async bool, hardLock, softLock, consul, vars string) error {
 	if emrPlaybook == "" {
 		return flagToError(fEmrPlaybook)
 	}
 	if emrCluster == "" {
 		return flagToError(fEmrCluster)
+	}
+	if consul != "" && hardLock == "" && softLock == "" {
+		return errors.New(
+			"--" + fLock + " or --" + fSoftLock + " is needed to make use of --" + fConsul)
+	}
+	if hardLock != "" && softLock != "" {
+		return errors.New("--" + fLock + " and --" + fSoftLock + " are mutually exclusive")
+	}
+	if async && (hardLock != "" || softLock != "") {
+		return errors.New(
+			"--" + fAsync + " and --" + fLock + " or --" + fSoftLock + " are not compatible")
 	}
 
 	varMap, err := varsToMap(vars)
@@ -268,7 +320,25 @@ func run(emrPlaybook string, emrCluster string, async bool, vars string) error {
 	if err != nil {
 		return err
 	}
-	return jfs.AddJobFlowSteps()
+
+	var lock Lock
+	if hardLock != "" || softLock != "" {
+		lock, err := GetLock(hardLock+softLock, consul)
+		if err != nil {
+			return err
+		}
+		err = lock.TryLock()
+		if err != nil {
+			return err
+		}
+	}
+
+	err = jfs.AddJobFlowSteps()
+
+	if lock != nil && (err == nil || softLock != "") {
+		defer lock.Unlock()
+	}
+	return err
 }
 
 // down terminates a running EMR cluster
@@ -341,6 +411,7 @@ func checkErr(err error) {
 	}
 }
 
+// getLogLevelKeys builds an array of the available log levels
 func getLogLevelKeys(logLevels map[string]log.Level) []string {
 	keys := make([]string, 0, len(logLevels))
 	for k := range logLevels {
