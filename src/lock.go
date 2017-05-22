@@ -14,10 +14,19 @@
 package main
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
+	"strconv"
 
-	"github.com/nightlyone/lockfile"
+	"io/ioutil"
+
+	"github.com/hashicorp/consul/api"
 )
+
+type LockHeldError string
+
+func (l LockHeldError) Error() string { return string(l) }
 
 // Lock interface abstracting over file-based or consul-based locks
 type Lock interface {
@@ -27,7 +36,7 @@ type Lock interface {
 
 // FileLock is for file-based locks
 type FileLock struct {
-	lock lockfile.Lockfile
+	path string
 }
 
 // InitFileLock builds a FileLock at the path speicifed by name
@@ -36,19 +45,81 @@ func InitFileLock(name string) (Lock, error) {
 	if err != nil {
 		return nil, err
 	}
-	lock, err := lockfile.New(path)
+	return &FileLock{path: path}, nil
+}
+
+// TryLock tries to acquire a lock on a file, returns true if the lock is already held
+func (fl FileLock) TryLock() error {
+	// need to check that the file doesn't exist since we support locks surviving process shutdown
+	if _, err := os.Stat(fl.path); err == nil {
+		return LockHeldError("lock already held at " + fl.path)
+	}
+
+	pid := os.Getppid()
+	err := ioutil.WriteFile(fl.path, []byte(strconv.Itoa(pid)+"\n"), 0666)
+	return err
+}
+
+// Unlock tries to release the lock on a file
+func (fl FileLock) Unlock() error {
+	return os.Remove(fl.path)
+}
+
+// ConsulLock is for Consul-based locks
+type ConsulLock struct {
+	kv  *api.KV
+	key string
+}
+
+// InitConsulLock builds a ConsulLock (a KV pair in Consul) with the name argument as key
+func InitConsulLock(consulAddress, name string) (Lock, error) {
+	client, err := api.NewClient(&api.Config{Address: consulAddress})
 	if err != nil {
 		return nil, err
 	}
-	return &FileLock{lock: lock}, nil
+
+	kv := client.KV()
+	return &ConsulLock{kv: kv, key: name}, nil
 }
 
-// TryLock tries to lock the file
-func (fl FileLock) TryLock() error {
-	return fl.lock.TryLock()
+// TryLock tries to acquire a lock from Consul
+func (cl ConsulLock) TryLock() error {
+	p, _, err := cl.kv.Get(cl.key, nil)
+	if err != nil {
+		return err
+	}
+	if p != nil {
+		return LockHeldError("lock already held at " + cl.key)
+	}
+	pid := os.Getppid()
+	_, err = cl.kv.Put(&api.KVPair{Key: cl.key, Value: []byte(strconv.Itoa(pid))}, nil)
+	return err
 }
 
-// Unlock tries to unlock the file
-func (fl FileLock) Unlock() error {
-	return fl.lock.Unlock()
+// Unlock tries to release the lock from Consul
+func (cl ConsulLock) Unlock() error {
+	p, _, err := cl.kv.Get(cl.key, nil)
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		return errors.New("lock not held")
+	}
+	_, err = cl.kv.Delete(cl.key, nil)
+	return err
+}
+
+// GetLock builds a file-based or consul-based lock depending on the consul varialbe
+func GetLock(lock, consul string) (Lock, error) {
+	var l Lock
+	var err error
+	if consul != "" {
+		l, err = InitConsulLock(consul, lock)
+	} else {
+		l, err = InitFileLock(lock)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return l, nil
 }
