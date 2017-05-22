@@ -39,6 +39,8 @@ const (
 	fVars        = "vars"
 	fAsync       = "async"
 	fLogLevel    = "log-level"
+	fLock        = "lock"
+	fConsul      = "consul"
 )
 
 func main() {
@@ -111,6 +113,8 @@ func main() {
 				getEmrPlaybookFlag(),
 				getEmrClusterFlag(),
 				getAsyncFlag(),
+				getLockFlag(),
+				getConsulFlag(),
 				getVarsFlag(),
 			},
 			Action: func(c *cli.Context) error {
@@ -118,6 +122,8 @@ func main() {
 					c.String(fEmrPlaybook),
 					c.String(fEmrCluster),
 					c.Bool(fAsync),
+					c.String(fLock),
+					c.String(fConsul),
 					c.String(fVars),
 				)
 				checkErr(err)
@@ -152,6 +158,8 @@ func main() {
 			Flags: []cli.Flag{
 				getEmrConfigFlag(),
 				getEmrPlaybookFlag(),
+				getLockFlag(),
+				getConsulFlag(),
 				getVarsFlag(),
 			},
 			Action: func(c *cli.Context) error {
@@ -163,7 +171,9 @@ func main() {
 				checkErr(err1)
 				log.Info("EMR cluster launched successfully; Jobflow ID: " + jobflowID)
 
-				err2 := run(emrPlaybook, jobflowID, false, vars)
+				lock := c.String(fLock)
+				consul := c.String(fConsul)
+				err2 := run(emrPlaybook, jobflowID, false, lock, consul, vars)
 				if err2 != nil {
 					log.Error(err2.Error())
 				} else {
@@ -211,6 +221,22 @@ func getAsyncFlag() cli.BoolFlag {
 	return cli.BoolFlag{Name: fAsync, Usage: "Asynchronous execution of the jobflow steps"}
 }
 
+func getLockFlag() cli.StringFlag {
+	usage := "Path to the lock held for the duration of the jobflow steps. This is materialized" +
+		" by a file or a KV entry in Consul depending on the --" + fConsul + "flag."
+	return cli.StringFlag{
+		Name:  fLock,
+		Usage: usage,
+	}
+}
+
+func getConsulFlag() cli.StringFlag {
+	return cli.StringFlag{
+		Name:  fConsul,
+		Usage: "Address of the Consul server used for distributed locking for the duration of the jobflow steps",
+	}
+}
+
 // --- Commands
 
 // up launches a new EMR cluster
@@ -244,17 +270,31 @@ func up(emrConfig string, vars string) (string, error) {
 }
 
 // run adds steps to an EMR cluster
-func run(emrPlaybook string, emrCluster string, async bool, vars string) error {
+func run(emrPlaybook string, emrCluster string, async bool, lock string, consul string, vars string) error {
 	if emrPlaybook == "" {
 		return flagToError(fEmrPlaybook)
 	}
 	if emrCluster == "" {
 		return flagToError(fEmrCluster)
 	}
+	if consul != "" && lock == "" {
+		return errors.New("--" + fLock + " is needed to make use of --" + fConsul)
+	}
 
 	varMap, err := varsToMap(vars)
 	if err != nil {
 		return err
+	}
+
+	if !async && lock != "" {
+		l, err := getLock(consul, lock)
+		err = l.TryLock()
+		if err != nil {
+			return err
+		}
+		defer l.Unlock()
+	} else if lock != "" {
+		return errors.New("--" + fAsync + " and --" + fLock + " are not compatible")
 	}
 
 	ar := getNewConfigResolver()
@@ -341,10 +381,26 @@ func checkErr(err error) {
 	}
 }
 
+// getLogLevelKeys builds an array of the available log levels
 func getLogLevelKeys(logLevels map[string]log.Level) []string {
 	keys := make([]string, 0, len(logLevels))
 	for k := range logLevels {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// getLock builds a file-based or consul-based lock
+func getLock(consul, lock string) (Lock, error) {
+	var l Lock
+	var err error
+	if consul != "" {
+		l, err = InitConsulLock(consul, lock)
+	} else {
+		l, err = InitFileLock(lock)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return l, nil
 }

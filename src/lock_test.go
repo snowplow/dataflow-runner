@@ -19,9 +19,79 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/hashicorp/consul/api"
+	"github.com/hashicorp/consul/testutil"
 	"github.com/nightlyone/lockfile"
 	"github.com/stretchr/testify/assert"
 )
+
+func makeClient(t *testing.T) (*api.Client, *testutil.TestServer) {
+	// Make client config
+	conf := api.DefaultConfig()
+	// Create server
+	server, err := testutil.NewTestServerConfigT(t, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf.Address = server.HTTPAddr
+
+	// Create client
+	client, err := api.NewClient(conf)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	return client, server
+}
+
+func TestConsulLock(t *testing.T) {
+	assert := assert.New(t)
+
+	c, s := makeClient(t)
+	assert.NotNil(c)
+	assert.NotNil(s)
+	defer s.Stop()
+
+	lockName := "lock"
+
+	cl, err := InitConsulLock("some://faulty.address", lockName)
+	assert.NotNil(err)
+	assert.Nil(cl)
+	assert.Equal("Unknown protocol scheme: some", err.Error())
+
+	cl, err = InitConsulLock(s.HTTPAddr, "")
+	assert.NotNil(err)
+	assert.Nil(cl)
+	assert.Equal("missing key", err.Error())
+
+	cl, err = InitConsulLock(s.HTTPAddr, lockName)
+	assert.Nil(err)
+	assert.NotNil(cl)
+
+	err = cl.TryLock()
+	assert.Nil(err)
+
+	// fail if already locked
+	err = cl.TryLock()
+	assert.NotNil(err)
+	assert.Equal(api.ErrLockHeld, err)
+
+	// fail if already locked by another lock
+	ocl, err := InitConsulLock(s.HTTPAddr, lockName)
+	assert.Nil(err)
+	assert.NotNil(ocl)
+	err = ocl.TryLock()
+	assert.NotNil(err)
+	assert.Equal("Lock held by another process", err.Error())
+
+	// fail if already unlocked
+	err = cl.Unlock()
+	assert.Nil(err)
+
+	err = cl.Unlock()
+	assert.NotNil(err)
+	assert.Equal(api.ErrLockNotHeld, err)
+}
 
 func TestFileLock(t *testing.T) {
 	assert := assert.New(t)
