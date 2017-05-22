@@ -14,8 +14,10 @@
 package main
 
 import (
+	"errors"
 	"path/filepath"
 
+	"github.com/hashicorp/consul/api"
 	"github.com/nightlyone/lockfile"
 )
 
@@ -43,12 +45,69 @@ func InitFileLock(name string) (Lock, error) {
 	return &FileLock{lock: lock}, nil
 }
 
-// TryLock tries to lock the file
+// TryLock tries to acquire a lock on a file
 func (fl FileLock) TryLock() error {
 	return fl.lock.TryLock()
 }
 
-// Unlock tries to unlock the file
+// Unlock tries to release the lock on a file
 func (fl FileLock) Unlock() error {
 	return fl.lock.Unlock()
+}
+
+// ConsulLock is for Consul-based locks
+type ConsulLock struct {
+	lock *api.Lock
+}
+
+// InitConsulLock builds a ConsulLock (a KV pair in Consul) with the name argument as key
+func InitConsulLock(consulAddress, name string) (Lock, error) {
+	client, err := api.NewClient(&api.Config{Address: consulAddress})
+	if err != nil {
+		return nil, err
+	}
+
+	opts := &api.LockOptions{
+		Key:         name,
+		LockTryOnce: true,
+	}
+
+	lock, err := client.LockOpts(opts)
+	if err != nil {
+		return nil, err
+	}
+	return &ConsulLock{lock: lock}, nil
+}
+
+// TryLock tries to acquire a lock from Consul
+func (cl ConsulLock) TryLock() error {
+	stopCh := make(chan struct{})
+	leaderCh, err := cl.lock.Lock(stopCh)
+	if err != nil {
+		return err
+	}
+	if leaderCh == nil {
+		return errors.New("Lock held by another process")
+	}
+	return nil
+}
+
+// Unlock tries to release the lock from Consul
+func (cl ConsulLock) Unlock() error {
+	return cl.lock.Unlock()
+}
+
+// GetLock builds a file-based or consul-based lock depending on the consul varialbe
+func GetLock(lock, consul string) (Lock, error) {
+	var l Lock
+	var err error
+	if consul != "" {
+		l, err = InitConsulLock(consul, lock)
+	} else {
+		l, err = InitFileLock(lock)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return l, nil
 }
