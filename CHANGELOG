@@ -1,3 +1,14 @@
+Version 0.3.0 (2017-05-24)
+--------------------------
+Short-circuit execution on unset variable (#16)
+Short-circuit execution on unset env variable (#26)
+Add timeWithFormat template function (#18)
+Add base64 template functions (#19)
+Add tags to playbook format (#27)
+Add file-based locking (#20)
+Add Consul-based locking (#17)
+Replace hard-coded template name by the file name (#28)
+
 Version 0.2.0 (2017-03-31)
 --------------------------
 Update README markdown in according with CommonMark (#14)
