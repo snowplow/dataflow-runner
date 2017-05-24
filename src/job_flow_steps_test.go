@@ -74,7 +74,7 @@ func mockJobFlowSteps(playbookConfig PlaybookConfig, jobflowID string) *JobFlowS
 func TestInitJobFlowSteps(t *testing.T) {
 	assert := assert.New(t)
 
-	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
+	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil, "")
 
 	jfs, _ := InitJobFlowSteps(*record, "j-id", true)
 	assert.NotNil(jfs)
@@ -96,7 +96,7 @@ func TestInitJobFlowSteps(t *testing.T) {
 
 func TestAddJobFlowSteps_Fail(t *testing.T) {
 	assert := assert.New(t)
-	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
+	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil, "")
 	jfs := mockJobFlowSteps(*record, "id")
 
 	// fails if emr.AddJobFlowSteps fails
@@ -124,7 +124,7 @@ func TestAddJobFlowSteps_Fail(t *testing.T) {
 }
 
 func TestAddJobFlowSteps_Success(t *testing.T) {
-	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
+	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil, "")
 	jfs := mockJobFlowSteps(*record, "j-COMPLETED")
 	err := jfs.AddJobFlowSteps()
 	assert.Nil(t, err)
@@ -133,7 +133,7 @@ func TestAddJobFlowSteps_Success(t *testing.T) {
 func TestGetJobFlowStepsInput_Success(t *testing.T) {
 	assert := assert.New(t)
 
-	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
+	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil, "")
 	jfs, _ := InitJobFlowSteps(*record, "jobflow-id", true)
 
 	assert.NotNil(jfs)
@@ -148,7 +148,7 @@ func TestGetJobFlowStepsInput_Success(t *testing.T) {
 func TestGetJobFlowStepsInput_Fail(t *testing.T) {
 	assert := assert.New(t)
 
-	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
+	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil, "")
 	jfs, _ := InitJobFlowSteps(*record, "jobflow-id", true)
 
 	assert.NotNil(jfs)

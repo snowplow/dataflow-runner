@@ -96,7 +96,7 @@ var CR, _ = InitConfigResolver()
 func TestInitEmrCluster(t *testing.T) {
 	assert := assert.New(t)
 
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 
 	ec, _ := InitEmrCluster(*record)
 	assert.NotNil(ec)
@@ -106,7 +106,7 @@ func TestInitEmrCluster(t *testing.T) {
 	assert.NotNil(err)
 	assert.Equal("access-key and secret-key must both be set to 'env', or neither", err.Error())
 
-	record, _ = CR.ParseClusterRecord([]byte(ClusterRecord2), nil)
+	record, _ = CR.ParseClusterRecord([]byte(ClusterRecord2), nil, "")
 
 	ec, _ = InitEmrCluster(*record)
 	assert.NotNil(ec)
@@ -119,7 +119,7 @@ func TestInitEmrCluster(t *testing.T) {
 
 func TestTerminateJobFlow_Fail(t *testing.T) {
 	assert := assert.New(t)
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 	ec := mockEmrCluster(*record)
 
 	// fails if TerminateJobFlows fails
@@ -134,7 +134,7 @@ func TestTerminateJobFlow_Fail(t *testing.T) {
 }
 
 func TestTerminateJobFlow_Success(t *testing.T) {
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 	ec := mockEmrCluster(*record)
 	err := ec.TerminateJobFlow("j-TERMINATED")
 	assert.Nil(t, err)
@@ -142,7 +142,7 @@ func TestTerminateJobFlow_Success(t *testing.T) {
 
 func TestRunJobFlow_Fail(t *testing.T) {
 	assert := assert.New(t)
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 
 	// fails if GetJobFlowInput fails
 	ec := mockEmrCluster(*record)
@@ -181,7 +181,7 @@ func TestRunJobFlow_Fail(t *testing.T) {
 }
 
 func TestRunJobFlow_Success(t *testing.T) {
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord2), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord2), nil, "")
 	record.Name = "WAITING"
 	ec := mockEmrCluster(*record)
 	id, _ := ec.runJobFlow(3)
@@ -191,7 +191,7 @@ func TestRunJobFlow_Success(t *testing.T) {
 func TestGetJobFlowInput_Success(t *testing.T) {
 	assert := assert.New(t)
 
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord2), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord2), nil, "")
 
 	// Master, Core and Task Instances
 	record.Ec2.Instances.Core.Count = 1
@@ -271,7 +271,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 func TestGetJobFlowInput_Fail(t *testing.T) {
 	assert := assert.New(t)
 
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 
 	// fails if GetLocation fails
 	ec, _ := InitEmrCluster(*record)
@@ -289,7 +289,7 @@ func TestGetJobFlowInput_Fail(t *testing.T) {
 	assert.Equal("At least one of Availability Zone and Subnet id is required", err.Error())
 
 	// fails if GetApplications fails
-	record, _ = CR.ParseClusterRecord([]byte(ClusterRecord2), nil)
+	record, _ = CR.ParseClusterRecord([]byte(ClusterRecord2), nil, "")
 	record.Applications = []string{"Snowplow"}
 	ec, _ = InitEmrCluster(*record)
 
@@ -298,7 +298,7 @@ func TestGetJobFlowInput_Fail(t *testing.T) {
 func TestGetInstanceGroups_NoEBS(t *testing.T) {
 	assert := assert.New(t)
 
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 	ec, _ := InitEmrCluster(*record)
 	groups := ec.GetInstanceGroups()
 	assert.Len(groups, 3)
@@ -329,7 +329,7 @@ func TestGetInstanceGroups_NoEBS(t *testing.T) {
 func TestGetInstanceGroups_WithEBS(t *testing.T) {
 	assert := assert.New(t)
 
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithEBS), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithEBS), nil, "")
 	ec, _ := InitEmrCluster(*record)
 	groups := ec.GetInstanceGroups()
 	assert.Len(groups, 3)
@@ -397,13 +397,13 @@ func TestGetInstanceGroups_WithEBS(t *testing.T) {
 }
 
 func TestGetTags_NoTags(t *testing.T) {
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 	ec, _ := InitEmrCluster(*record)
 	assert.Nil(t, ec.GetTags())
 }
 
 func TestGetTags_WithTags(t *testing.T) {
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithTags), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithTags), nil, "")
 	ec, _ := InitEmrCluster(*record)
 	tags := ec.GetTags()
 	assert.Len(t, tags, 1)
@@ -415,13 +415,13 @@ func TestGetTags_WithTags(t *testing.T) {
 }
 
 func TestGetBootstrapActions_NoActions(t *testing.T) {
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 	ec, _ := InitEmrCluster(*record)
 	assert.Nil(t, ec.GetBootstrapActions())
 }
 
 func TestGetBootstrapActions_WithActions(t *testing.T) {
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithActions), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithActions), nil, "")
 	ec, _ := InitEmrCluster(*record)
 	actions := ec.GetBootstrapActions()
 	assert.Len(t, actions, 1)
@@ -436,13 +436,13 @@ func TestGetBootstrapActions_WithActions(t *testing.T) {
 }
 
 func TestGetConfigurations_NoConfigs(t *testing.T) {
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 	ec, _ := InitEmrCluster(*record)
 	assert.Nil(t, ec.GetConfigurations())
 }
 
 func TestGetConfigurations_WithConfigs(t *testing.T) {
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithConfigs), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithConfigs), nil, "")
 	ec, _ := InitEmrCluster(*record)
 	configs := ec.GetConfigurations()
 	assert.Len(t, configs, 1)
@@ -454,7 +454,7 @@ func TestGetConfigurations_WithConfigs(t *testing.T) {
 }
 
 func TestGetApplications_NoApps(t *testing.T) {
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 	ec, _ := InitEmrCluster(*record)
 	apps, err := ec.GetApplications()
 	assert.Nil(t, apps)
@@ -463,7 +463,7 @@ func TestGetApplications_NoApps(t *testing.T) {
 
 func TestGetApplications_WithApps(t *testing.T) {
 	assert := assert.New(t)
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithApps), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithApps), nil, "")
 	ec, _ := InitEmrCluster(*record)
 	apps, _ := ec.GetApplications()
 	assert.Len(apps, 2)
@@ -480,7 +480,7 @@ func TestGetApplications_WithApps(t *testing.T) {
 
 func TestGetLocation_Fail(t *testing.T) {
 	assert := assert.New(t)
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 	ec, _ := InitEmrCluster(*record)
 
 	_, _, err := ec.GetLocation()
@@ -497,7 +497,7 @@ func TestGetLocation_Fail(t *testing.T) {
 func TestGetLocation_Success(t *testing.T) {
 	assert := assert.New(t)
 
-	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord2), nil)
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord2), nil, "")
 	ec, _ := InitEmrCluster(*record)
 
 	s, p, err := ec.GetLocation()

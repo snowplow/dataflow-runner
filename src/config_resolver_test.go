@@ -39,7 +39,7 @@ func TestParseClusterRecord_Success(t *testing.T) {
 	assert := assert.New(t)
 
 	ar, _ := InitConfigResolver()
-	res, err := ar.ParseClusterRecord([]byte(ClusterRecord1), nil)
+	res, err := ar.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 
 	assert.NotNil(res)
 	assert.Nil(err)
@@ -57,7 +57,7 @@ func TestParseClusterRecord_Success(t *testing.T) {
 	assert.Equal(int64(1), res.Ec2.Instances.Task.Count)
 	assert.Equal("0.015", res.Ec2.Instances.Task.Bid)
 
-	res, err = ar.ParseClusterRecord([]byte(ClusterRecord2), nil)
+	res, err = ar.ParseClusterRecord([]byte(ClusterRecord2), nil, "")
 
 	assert.NotNil(res)
 	assert.Nil(err)
@@ -80,16 +80,16 @@ func TestParseClusterRecord_Fail(t *testing.T) {
 	assert := assert.New(t)
 
 	ar, _ := InitConfigResolver()
-	res, err := ar.ParseClusterRecord([]byte("{"), nil)
+	res, err := ar.ParseClusterRecord([]byte("{"), nil, "")
 	assert.Nil(res)
 	assert.NotNil(err)
 	assert.Equal("unexpected end of JSON input", err.Error())
 
-	res, err = ar.ParseClusterRecord([]byte("{}"), nil)
+	res, err = ar.ParseClusterRecord([]byte("{}"), nil, "")
 	assert.NotNil(res)
 	assert.Nil(err)
 
-	res, err = ar.ParseClusterRecord([]byte(`{"schema":{},"data":"iglu:com.snowplowanalytics.dataflow-runner/Cluster/avro/1-0-0"}`), nil)
+	res, err = ar.ParseClusterRecord([]byte(`{"schema":{},"data":"iglu:com.snowplowanalytics.dataflow-runner/Cluster/avro/1-0-0"}`), nil, "")
 	assert.Nil(res)
 	assert.NotNil(err)
 	assert.Equal("json: cannot unmarshal object into Go struct field SelfDescribingRecord.Schema of type string", err.Error())
@@ -104,7 +104,7 @@ func TestParsePlaybookRecord_Success(t *testing.T) {
 	assert := assert.New(t)
 
 	ar, _ := InitConfigResolver()
-	res, err := ar.ParsePlaybookRecord([]byte(PlaybookRecord1), nil)
+	res, err := ar.ParsePlaybookRecord([]byte(PlaybookRecord1), nil, "")
 
 	assert.NotNil(res)
 	assert.Nil(err)
@@ -132,16 +132,16 @@ func TestParsePlaybookRecord_Fail(t *testing.T) {
 	assert := assert.New(t)
 
 	ar, _ := InitConfigResolver()
-	res, err := ar.ParsePlaybookRecord([]byte("{"), nil)
+	res, err := ar.ParsePlaybookRecord([]byte("{"), nil, "")
 	assert.Nil(res)
 	assert.NotNil(err)
 	assert.Equal("unexpected end of JSON input", err.Error())
 
-	res, err = ar.ParsePlaybookRecord([]byte("{}"), nil)
+	res, err = ar.ParsePlaybookRecord([]byte("{}"), nil, "")
 	assert.NotNil(res)
 	assert.Nil(err)
 
-	res, err = ar.ParsePlaybookRecord([]byte(`{"schema":{},"data":"iglu:com.snowplowanalytics.dataflow-runner/Cluster/avro/1-0-0"}`), nil)
+	res, err = ar.ParsePlaybookRecord([]byte(`{"schema":{},"data":"iglu:com.snowplowanalytics.dataflow-runner/Cluster/avro/1-0-0"}`), nil, "")
 	assert.Nil(res)
 	assert.NotNil(err)
 	assert.Equal("json: cannot unmarshal object into Go struct field SelfDescribingRecord.Schema of type string", err.Error())
@@ -156,11 +156,12 @@ func TestToSelfDescribingRecord(t *testing.T) {
 	assert := assert.New(t)
 
 	byteArr := []byte(`{"schema":"iglu:com.snowplowanalytics.dataflow-runner/Cluster/avro/1-0-0","data":{"key":"{{systemEnvs "TEST_ENV_VAR"}}","key2":"{{ .someVar}}","key3":"{{nowWithFormat "2006"}}"}}`)
-	sdr, err := toSelfDescribingRecord(byteArr, nil)
+	templateName := "template"
+	sdr, err := toSelfDescribingRecord(byteArr, nil, templateName)
 
 	assert.Nil(sdr)
 	assert.NotNil(err)
-	assert.Equal("template: playbook:1: function \"systemEnvs\" not defined", err.Error())
+	assert.Equal("template: "+templateName+":1: function \"systemEnvs\" not defined", err.Error())
 }
 
 func TestTemplateRawBytes(t *testing.T) {
@@ -171,17 +172,19 @@ func TestTemplateRawBytes(t *testing.T) {
 	}
 
 	byteArr := []byte(`{"key":"{{.someVar}}"}`)
-	templatedByteArr, err := templateRawBytes(byteArr, varMap)
+	templatedByteArr, err := templateRawBytes(byteArr, varMap, "")
 	assert.NotNil(templatedByteArr)
 	assert.Nil(err)
 	assert.Equal(`{"key":"golangTestVar"}`, string(templatedByteArr))
 
 	byteArr = []byte(`{"key":"{{.someOtherVar}}"}`)
-	templateByteArr, err := templateRawBytes(byteArr, varMap)
+	templateName := "template"
+	templateByteArr, err := templateRawBytes(byteArr, varMap, templateName)
 	assert.Nil(templateByteArr)
 	assert.NotNil(err)
 	assert.Equal(
-		"template: playbook:1:10: executing \"playbook\" at <.someOtherVar>: map has no entry for key \"someOtherVar\"",
+		"template: "+templateName+":1:10: executing \""+templateName+
+			"\" at <.someOtherVar>: map has no entry for key \"someOtherVar\"",
 		err.Error())
 }
 
@@ -189,7 +192,7 @@ func TestTemplateRawBytes_nowWithFormat(t *testing.T) {
 	currYear := strconv.Itoa(time.Now().Year())
 
 	byteArr := []byte(`{"key":"{{nowWithFormat "2006"}}"}`)
-	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
+	templatedByteArr, err := templateRawBytes(byteArr, nil, "")
 	assert.NotNil(t, templatedByteArr)
 	assert.Nil(t, err)
 	assert.Equal(t, `{"key":"`+currYear+`"}`, string(templatedByteArr))
@@ -197,7 +200,7 @@ func TestTemplateRawBytes_nowWithFormat(t *testing.T) {
 
 func TestTemplateRawBytes_timeWithFormat(t *testing.T) {
 	byteArr := []byte(`{"key":"{{timeWithFormat 1494930397 "2006"}}"}`)
-	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
+	templatedByteArr, err := templateRawBytes(byteArr, nil, "")
 	assert.NotNil(t, templatedByteArr)
 	assert.Nil(t, err)
 	assert.Equal(t, `{"key":"2017"}`, string(templatedByteArr))
@@ -210,23 +213,25 @@ func TestTemplateRawBytes_systemEnv(t *testing.T) {
 	assert.Nil(err)
 
 	byteArr := []byte(`{"key":"{{systemEnv "TEST_ENV_VAR"}}"}`)
-	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
+	templatedByteArr, err := templateRawBytes(byteArr, nil, "")
 	assert.NotNil(templatedByteArr)
 	assert.Nil(err)
 	assert.Equal(`{"key":"golangTestEnvVar"}`, string(templatedByteArr))
 
 	byteArr = []byte(`{"key":"{{systemEnv "DOESNT_EXIST"}}"}`)
-	templatedByteArr, err = templateRawBytes(byteArr, map[string]interface{}{})
+	templateName := "template"
+	templatedByteArr, err = templateRawBytes(byteArr, nil, templateName)
 	assert.NotNil(err)
 	assert.Nil(templatedByteArr)
 	assert.Equal(
-		`template: playbook:1:10: executing "playbook" at <systemEnv "DOESNT_EX...>: error calling systemEnv: environment variable DOESNT_EXIST not set`,
+		`template: `+templateName+`:1:10: executing "`+templateName+
+			`" at <systemEnv "DOESNT_EX...>: error calling systemEnv: environment variable DOESNT_EXIST not set`,
 		err.Error())
 }
 
 func TestTemplateRawBytes_base64(t *testing.T) {
 	byteArr := []byte(`{"key":"{{base64 "abc"}}"}`)
-	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
+	templatedByteArr, err := templateRawBytes(byteArr, nil, "")
 	assert.NotNil(t, templatedByteArr)
 	assert.Nil(t, err)
 	assert.Equal(t, `{"key":"YWJj"}`, string(templatedByteArr))
@@ -245,24 +250,27 @@ func TestTemplateRawBytes_base64File(t *testing.T) {
 	assert.Nil(err)
 
 	byteArr := []byte(`{"key":"{{base64File "` + tmpFile.Name() + `"}}"}`)
-	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
+	templatedByteArr, err := templateRawBytes(byteArr, nil, "")
 	assert.NotNil(templatedByteArr)
 	assert.Nil(err)
 	assert.Equal(`{"key":"YWJj"}`, string(templatedByteArr))
 
 	byteArr = []byte(`{"key":"{{base64File "/tmp/doesnt/exist"}}"}`)
-	templatedByteArr, err = templateRawBytes(byteArr, map[string]interface{}{})
+	templateName := "template"
+	templatedByteArr, err = templateRawBytes(byteArr, nil, templateName)
 	assert.NotNil(err)
 	assert.Nil(templatedByteArr)
 	assert.Equal(
-		`template: playbook:1:10: executing "playbook" at <base64File "/tmp/doe...>: error calling base64File: open /tmp/doesnt/exist: no such file or directory`,
+		`template: `+templateName+`:1:10: executing "`+templateName+
+			`" at <base64File "/tmp/doe...>: error calling base64File: open /tmp/doesnt/exist: no such file or directory`,
 		err.Error())
 }
 
 func TestTemplateRawBytes_doesntExist(t *testing.T) {
 	byteArr := []byte(`{"key":"{{doesntExist "TEST_ENV_VAR"}}"}`)
-	templatedByteArr, err := templateRawBytes(byteArr, map[string]interface{}{})
+	templateName := "template"
+	templatedByteArr, err := templateRawBytes(byteArr, nil, templateName)
 	assert.Nil(t, templatedByteArr)
 	assert.NotNil(t, err)
-	assert.Equal(t, "template: playbook:1: function \"doesntExist\" not defined", err.Error())
+	assert.Equal(t, "template: "+templateName+":1: function \"doesntExist\" not defined", err.Error())
 }
