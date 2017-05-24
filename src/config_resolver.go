@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"text/template"
 	"time"
 
@@ -114,12 +115,12 @@ func (cr ConfigResolver) ParseClusterRecordFromFile(filePath string, variables m
 		return nil, err
 	}
 
-	return cr.ParseClusterRecord(jsonBytes, variables)
+	return cr.ParseClusterRecord(jsonBytes, variables, filepath.Base(filePath))
 }
 
 // ParseClusterRecord attempts to parse a JSON file to a ClusterConfig
-func (cr ConfigResolver) ParseClusterRecord(jsonBytes []byte, variables map[string]interface{}) (*ClusterConfig, error) {
-	sdr, err := toSelfDescribingRecord(jsonBytes, variables)
+func (cr ConfigResolver) ParseClusterRecord(jsonBytes []byte, variables map[string]interface{}, templateName string) (*ClusterConfig, error) {
+	sdr, err := toSelfDescribingRecord(jsonBytes, variables, templateName)
 	if err != nil {
 		return nil, err
 	}
@@ -150,12 +151,12 @@ func (cr ConfigResolver) ParsePlaybookRecordFromFile(filePath string, variables 
 		return nil, err
 	}
 
-	return cr.ParsePlaybookRecord(jsonBytes, variables)
+	return cr.ParsePlaybookRecord(jsonBytes, variables, filepath.Base(filePath))
 }
 
 // ParsePlaybookRecord attempts to parse a JSON file to a PlaybookConfig
-func (cr ConfigResolver) ParsePlaybookRecord(jsonBytes []byte, variables map[string]interface{}) (*PlaybookConfig, error) {
-	sdr, err := toSelfDescribingRecord(jsonBytes, variables)
+func (cr ConfigResolver) ParsePlaybookRecord(jsonBytes []byte, variables map[string]interface{}, templateName string) (*PlaybookConfig, error) {
+	sdr, err := toSelfDescribingRecord(jsonBytes, variables, templateName)
 	if err != nil {
 		return nil, err
 	}
@@ -210,8 +211,8 @@ func parseRecordAsAvro(schema avro.Schema, recordJSON interface{}, decodedRecord
 }
 
 // toSelfDescribingRecord takes a byte array and returns a SelfDescribingRecord
-func toSelfDescribingRecord(jsonBytes []byte, variables map[string]interface{}) (*SelfDescribingRecord, error) {
-	templateBytes, err := templateRawBytes(jsonBytes, variables)
+func toSelfDescribingRecord(jsonBytes []byte, variables map[string]interface{}, templateName string) (*SelfDescribingRecord, error) {
+	templateBytes, err := templateRawBytes(jsonBytes, variables, templateName)
 	if err != nil {
 		return nil, err
 	}
@@ -226,8 +227,8 @@ func toSelfDescribingRecord(jsonBytes []byte, variables map[string]interface{}) 
 }
 
 // templateRawBytes runs the raw config through the golang templater
-func templateRawBytes(rawBytes []byte, variables map[string]interface{}) ([]byte, error) {
-	t, err := template.New("playbook").
+func templateRawBytes(rawBytes []byte, variables map[string]interface{}, templateName string) ([]byte, error) {
+	t, err := template.New(templateName).
 		Funcs(templFuncs).
 		Option("missingkey=error").
 		Parse(string(rawBytes))
