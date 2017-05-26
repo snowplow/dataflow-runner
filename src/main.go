@@ -27,21 +27,27 @@ import (
 	"gopkg.in/urfave/cli.v1"
 )
 
+type lockError string
+
+func (l lockError) Error() string { return string(l) }
+
 const (
-	appName      = "dataflow-runner"
-	appUsage     = "Run templatable playbooks of Hadoop/Spark/et al jobs on Amazon EMR"
-	appCopyright = "(c) 2016-2017 Snowplow Analytics Ltd"
-	cliVersion   = "0.1.0"
-	varDelim     = ","
-	fEmrConfig   = "emr-config"
-	fEmrPlaybook = "emr-playbook"
-	fEmrCluster  = "emr-cluster"
-	fVars        = "vars"
-	fAsync       = "async"
-	fLogLevel    = "log-level"
-	fLock        = "lock"
-	fSoftLock    = "softLock"
-	fConsul      = "consul"
+	appName                = "dataflow-runner"
+	appUsage               = "Run templatable playbooks of Hadoop/Spark/et al jobs on Amazon EMR"
+	appCopyright           = "(c) 2016-2017 Snowplow Analytics Ltd"
+	cliVersion             = "0.1.0"
+	varDelim               = ","
+	fEmrConfig             = "emr-config"
+	fEmrPlaybook           = "emr-playbook"
+	fEmrCluster            = "emr-cluster"
+	fVars                  = "vars"
+	fAsync                 = "async"
+	fLogLevel              = "log-level"
+	fLock                  = "lock"
+	fSoftLock              = "softLock"
+	fConsul                = "consul"
+	lockFileExistsExitCode = 17
+	otherExitCode          = 1
 )
 
 func main() {
@@ -101,7 +107,9 @@ func main() {
 					c.String(fEmrConfig),
 					c.String(fVars),
 				)
-				checkErr(err)
+				if err != nil {
+					return exitCodeError(err)
+				}
 
 				log.Info("EMR cluster launched successfully; Jobflow ID: " + jobflowID)
 				return nil
@@ -120,18 +128,38 @@ func main() {
 				getVarsFlag(),
 			},
 			Action: func(c *cli.Context) error {
-				err := run(
+				async := c.Bool(fAsync)
+				hardLock := c.String(fLock)
+				softLock := c.String(fSoftLock)
+				consul := c.String(fConsul)
+
+				err := checkLockFlags(async, hardLock, softLock, consul)
+				if err != nil {
+					return exitCodeError(err)
+				}
+
+				lock, err := initLock(hardLock, softLock, consul)
+				if err != nil {
+					return exitCodeError(lockError(err.Error()))
+				}
+
+				err = run(
 					c.String(fEmrPlaybook),
 					c.String(fEmrCluster),
-					c.Bool(fAsync),
-					c.String(fLock),
-					c.String(fSoftLock),
-					c.String(fConsul),
+					async,
 					c.String(fVars),
 				)
-				checkErr(err)
+				if err != nil {
+					if lock != nil && softLock != "" {
+						lock.Unlock()
+					}
+					return exitCodeError(err)
+				} else if lock != nil {
+					lock.Unlock()
+				}
 
 				log.Info("All steps completed successfully")
+
 				return nil
 			},
 		},
@@ -149,7 +177,9 @@ func main() {
 					c.String(fEmrCluster),
 					c.String(fVars),
 				)
-				checkErr(err)
+				if err != nil {
+					return exitCodeError(err)
+				}
 
 				log.Info("EMR cluster terminated successfully")
 				return nil
@@ -169,31 +199,52 @@ func main() {
 			Action: func(c *cli.Context) error {
 				emrConfig := c.String(fEmrConfig)
 				emrPlaybook := c.String(fEmrPlaybook)
-				vars := c.String(fVars)
-
-				jobflowID, err1 := up(emrConfig, vars)
-				checkErr(err1)
-				log.Info("EMR cluster launched successfully; Jobflow ID: " + jobflowID)
-
-				lock := c.String(fLock)
+				hardLock := c.String(fLock)
 				softLock := c.String(fSoftLock)
 				consul := c.String(fConsul)
-				err2 := run(emrPlaybook, jobflowID, false, lock, softLock, consul, vars)
-				if err2 != nil {
-					log.Error(err2.Error())
-				} else {
-					log.Info("All steps completed successfully")
+				vars := c.String(fVars)
+
+				err := checkLockFlags(false, hardLock, softLock, consul)
+				if err != nil {
+					return exitCodeError(err)
 				}
 
+				lock, err := initLock(hardLock, softLock, consul)
+				if err != nil {
+					return exitCodeError(lockError(err.Error()))
+				}
+
+				jobflowID, err1 := up(emrConfig, vars)
+				if err1 != nil {
+					if lock != nil && softLock != "" {
+						lock.Unlock()
+					}
+					return exitCodeError(err1)
+				}
+				log.Info("EMR cluster launched successfully; Jobflow ID: " + jobflowID)
+				err2 := run(emrPlaybook, jobflowID, false, vars)
+
 				err3 := down(emrConfig, jobflowID, vars)
-				checkErr(err3)
+				if err3 != nil {
+					if lock != nil && softLock != "" {
+						lock.Unlock()
+					}
+					return exitCodeError(err3)
+				}
 				log.Info("EMR cluster terminated successfully")
 
 				if err2 != nil {
+					if lock != nil && softLock != "" {
+						lock.Unlock()
+					}
 					log.Error("Transient EMR run completed with errors")
-					log.Fatal(err2.Error())
-				} else {
-					log.Info("Transient EMR run completed successfully")
+					return exitCodeError(err2)
+				}
+
+				log.Info("Transient EMR run completed successfully")
+
+				if lock != nil {
+					lock.Unlock()
 				}
 
 				return nil
@@ -265,7 +316,10 @@ func up(emrConfig string, vars string) (string, error) {
 		return "", err
 	}
 
-	ar := getNewConfigResolver()
+	ar, err := InitConfigResolver()
+	if err != nil {
+		return "", err
+	}
 
 	clusterRecord, err := ar.ParseClusterRecordFromFile(emrConfig, varMap)
 	if err != nil {
@@ -285,23 +339,12 @@ func up(emrConfig string, vars string) (string, error) {
 }
 
 // run adds steps to an EMR cluster
-func run(emrPlaybook, emrCluster string, async bool, hardLock, softLock, consul, vars string) error {
+func run(emrPlaybook, emrCluster string, async bool, vars string) error {
 	if emrPlaybook == "" {
 		return flagToError(fEmrPlaybook)
 	}
 	if emrCluster == "" {
 		return flagToError(fEmrCluster)
-	}
-	if consul != "" && hardLock == "" && softLock == "" {
-		return errors.New(
-			"--" + fLock + " or --" + fSoftLock + " is needed to make use of --" + fConsul)
-	}
-	if hardLock != "" && softLock != "" {
-		return errors.New("--" + fLock + " and --" + fSoftLock + " are mutually exclusive")
-	}
-	if async && (hardLock != "" || softLock != "") {
-		return errors.New(
-			"--" + fAsync + " and --" + fLock + " or --" + fSoftLock + " are not compatible")
 	}
 
 	varMap, err := varsToMap(vars)
@@ -309,7 +352,10 @@ func run(emrPlaybook, emrCluster string, async bool, hardLock, softLock, consul,
 		return err
 	}
 
-	ar := getNewConfigResolver()
+	ar, err := InitConfigResolver()
+	if err != nil {
+		return err
+	}
 
 	playbookRecord, err := ar.ParsePlaybookRecordFromFile(emrPlaybook, varMap)
 	if err != nil {
@@ -321,24 +367,7 @@ func run(emrPlaybook, emrCluster string, async bool, hardLock, softLock, consul,
 		return err
 	}
 
-	var lock Lock
-	if hardLock != "" || softLock != "" {
-		lock, err := GetLock(hardLock+softLock, consul)
-		if err != nil {
-			return err
-		}
-		err = lock.TryLock()
-		if err != nil {
-			return err
-		}
-	}
-
-	err = jfs.AddJobFlowSteps()
-
-	if lock != nil && (err == nil || softLock != "") {
-		defer lock.Unlock()
-	}
-	return err
+	return jfs.AddJobFlowSteps()
 }
 
 // down terminates a running EMR cluster
@@ -355,7 +384,10 @@ func down(emrConfig string, emrCluster string, vars string) error {
 		return err
 	}
 
-	ar := getNewConfigResolver()
+	ar, err := InitConfigResolver()
+	if err != nil {
+		return err
+	}
 
 	clusterRecord, err := ar.ParseClusterRecordFromFile(emrConfig, varMap)
 	if err != nil {
@@ -374,6 +406,22 @@ func down(emrConfig string, emrCluster string, vars string) error {
 // flagToError returns a generic error for a missing flag
 func flagToError(flag string) error {
 	return errors.New("--" + flag + " needs to be specified")
+}
+
+// checkLockFlags checks the validity of the lock-related flags
+func checkLockFlags(async bool, hardLock, softLock, consul string) error {
+	if consul != "" && hardLock == "" && softLock == "" {
+		return errors.New(
+			"--" + fLock + " or --" + fSoftLock + " is needed to make use of --" + fConsul)
+	}
+	if hardLock != "" && softLock != "" {
+		return errors.New("--" + fLock + " and --" + fSoftLock + " are mutually exclusive")
+	}
+	if async && (hardLock != "" || softLock != "") {
+		return errors.New(
+			"--" + fAsync + " and --" + fLock + " or --" + fSoftLock + " are not compatible")
+	}
+	return nil
 }
 
 // varsToMap converts the variables argument to a map of
@@ -396,18 +444,15 @@ func varsToMap(vars string) (map[string]interface{}, error) {
 	return varsMap, nil
 }
 
-// getNewConfigResolver gets a new ConfigResolver instance
-func getNewConfigResolver() *ConfigResolver {
-	ar, err := InitConfigResolver()
-	checkErr(err)
-	return ar
-}
-
-// checkErr is a utility function to exit the application on
-// any errors being detected
-func checkErr(err error) {
-	if err != nil {
-		log.Fatal(err.Error())
+// exitCodeError turns an error into an exit code aware error
+func exitCodeError(err error) error {
+	switch err.(type) {
+	case lockError:
+		log.Warn(err.Error())
+		return cli.NewExitError(err.Error(), lockFileExistsExitCode)
+	default:
+		log.Error(err.Error())
+		return cli.NewExitError(err.Error(), otherExitCode)
 	}
 }
 
@@ -418,4 +463,21 @@ func getLogLevelKeys(logLevels map[string]log.Level) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// initLock tries to init a lock
+func initLock(hardLock, softLock, consul string) (Lock, error) {
+	var lock Lock
+	var err error
+	if hardLock != "" || softLock != "" {
+		lock, err = GetLock(hardLock+softLock, consul)
+		if err != nil {
+			return nil, err
+		}
+		err = lock.TryLock()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return lock, nil
 }
