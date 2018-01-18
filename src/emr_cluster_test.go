@@ -25,11 +25,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type mockEmrClient struct {
+type mockEMRAPICluster struct {
 	emriface.EMRAPI
 }
 
-func (m *mockEmrClient) TerminateJobFlows(input *emr.TerminateJobFlowsInput) (*emr.TerminateJobFlowsOutput, error) {
+func (m *mockEMRAPICluster) TerminateJobFlows(input *emr.TerminateJobFlowsInput) (*emr.TerminateJobFlowsOutput, error) {
 	if !strings.HasPrefix(*input.JobFlowIds[0], "j-") {
 		return nil, errors.New("TerminateJobFlows failed")
 	}
@@ -38,7 +38,7 @@ func (m *mockEmrClient) TerminateJobFlows(input *emr.TerminateJobFlowsInput) (*e
 
 // Mock using the cluster id of input to set the cluster state
 // ClusterId = "j-STARTING" will result in a cluster with the STARTING state
-func (m *mockEmrClient) DescribeCluster(input *emr.DescribeClusterInput) (*emr.DescribeClusterOutput, error) {
+func (m *mockEMRAPICluster) DescribeCluster(input *emr.DescribeClusterInput) (*emr.DescribeClusterOutput, error) {
 	if !strings.HasPrefix(*input.ClusterId, "j-") {
 		return nil, errors.New("DescribeCluster failed")
 	}
@@ -75,7 +75,7 @@ func (m *mockEmrClient) DescribeCluster(input *emr.DescribeClusterInput) (*emr.D
 	}, nil
 }
 
-func (m *mockEmrClient) RunJobFlow(input *emr.RunJobFlowInput) (*emr.RunJobFlowOutput, error) {
+func (m *mockEMRAPICluster) RunJobFlow(input *emr.RunJobFlowInput) (*emr.RunJobFlowOutput, error) {
 	if *input.Name == "fail" {
 		return nil, errors.New("RunJobFlow failed")
 	}
@@ -87,7 +87,7 @@ func (m *mockEmrClient) RunJobFlow(input *emr.RunJobFlowInput) (*emr.RunJobFlowO
 func mockEmrCluster(clusterRecord ClusterConfig) *EmrCluster {
 	return &EmrCluster{
 		Config: clusterRecord,
-		Svc:    &mockEmrClient{},
+		Svc:    &mockEMRAPICluster{},
 	}
 }
 

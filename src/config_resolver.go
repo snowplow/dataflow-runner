@@ -115,7 +115,7 @@ func InitConfigResolver() (*ConfigResolver, error) {
 
 // ParseClusterRecordFromFile attempts to parse a JSON file to a ClusterConfig
 func (cr ConfigResolver) ParseClusterRecordFromFile(filePath string, variables map[string]interface{}) (*ClusterConfig, error) {
-	jsonBytes, err := FilePathToByteArray(filePath)
+	jsonBytes, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +151,7 @@ func (cr ConfigResolver) ParseClusterRecord(jsonBytes []byte, variables map[stri
 
 // ParsePlaybookRecordFromFile attempts to parse a JSON file to a PlaybookConfig
 func (cr ConfigResolver) ParsePlaybookRecordFromFile(filePath string, variables map[string]interface{}) (*PlaybookConfig, error) {
-	jsonBytes, err := FilePathToByteArray(filePath)
+	jsonBytes, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return nil, err
 	}

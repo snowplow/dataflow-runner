@@ -31,7 +31,7 @@ type JobFlowSteps struct {
 	Config     PlaybookConfig
 	JobflowID  string
 	IsBlocking bool
-	Svc        emriface.EMRAPI
+	EmrSvc     emriface.EMRAPI
 }
 
 // InitJobFlowSteps creates a new JobFlowSteps instance
@@ -42,7 +42,7 @@ func InitJobFlowSteps(playbookConfig PlaybookConfig, jobflowID string, isAsync b
 		return nil, err
 	}
 
-	svc := emr.New(session.New(), &aws.Config{
+	emrSvc := emr.New(session.New(), &aws.Config{
 		Region:      aws.String(playbookConfig.Region),
 		Credentials: creds,
 	})
@@ -51,28 +51,30 @@ func InitJobFlowSteps(playbookConfig PlaybookConfig, jobflowID string, isAsync b
 		Config:     playbookConfig,
 		JobflowID:  jobflowID,
 		IsBlocking: !isAsync,
-		Svc:        svc,
+		EmrSvc:     emrSvc,
 	}, nil
 }
 
 // AddJobFlowSteps builds the parameters and then submits them to
-// the running EMR cluster
-func (jfs JobFlowSteps) AddJobFlowSteps() error {
+// the running EMR cluster, returns the ids of the failed steps
+func (jfs JobFlowSteps) AddJobFlowSteps() ([]string, error) {
 	params, err := jfs.GetJobFlowStepsInput()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	done := false
 	successCount := 0
 	errorCount := 0
+	failedStepsIDs := []string{}
 
-	resp, err := jfs.Svc.AddJobFlowSteps(params)
+	resp, err := jfs.EmrSvc.AddJobFlowSteps(params)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	log.Info("Successfully added " + strconv.Itoa(len(jfs.Config.Steps)) + " steps to the EMR cluster with jobflow id '" + jfs.JobflowID + "'...")
+	log.Info("Successfully added " + strconv.Itoa(len(jfs.Config.Steps)) +
+		" steps to the EMR cluster with jobflow id '" + jfs.JobflowID + "'...")
 
 	for done == false && jfs.IsBlocking == true {
 
@@ -82,17 +84,22 @@ func (jfs JobFlowSteps) AddJobFlowSteps() error {
 				StepId:    stepID,
 			}
 
-			resp1, err := jfs.Svc.DescribeStep(params1)
+			resp1, err := jfs.EmrSvc.DescribeStep(params1)
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 			if *resp1.Step.Status.State == "COMPLETED" {
-				log.Info("Step '" + *resp1.Step.Name + "' with id '" + *resp1.Step.Id + "' completed successfully")
+				log.Info("Step '" + *resp1.Step.Name + "' with id '" +
+					*resp1.Step.Id + "' completed successfully")
 				successCount++
 			} else if *resp1.Step.Status.State == "CANCELLED" || *resp1.Step.Status.State == "FAILED" {
-				log.Error("Step '" + *resp1.Step.Name + "' with id '" + *resp1.Step.Id + "' was " + *resp1.Step.Status.State)
+				log.Error("Step '" + *resp1.Step.Name + "' with id '" +
+					*resp1.Step.Id + "' was " + *resp1.Step.Status.State)
 				errorCount++
+				if *resp1.Step.Status.State == "FAILED" {
+					failedStepsIDs = append(failedStepsIDs, *resp1.Step.Id)
+				}
 			}
 		}
 
@@ -102,13 +109,15 @@ func (jfs JobFlowSteps) AddJobFlowSteps() error {
 			time.Sleep(time.Second * 15)
 			successCount = 0
 			errorCount = 0
+			failedStepsIDs = []string{}
 		}
 	}
 
 	if errorCount == 0 {
-		return nil
+		return nil, nil
 	}
-	return errors.New("" + strconv.Itoa(errorCount) + "/" + strconv.Itoa(len(resp.StepIds)) + " steps failed to complete successfully")
+	return failedStepsIDs, errors.New("" + strconv.Itoa(errorCount) + "/" +
+		strconv.Itoa(len(resp.StepIds)) + " steps failed to complete successfully")
 }
 
 // GetJobFlowStepsInput parses the config given to it and
@@ -134,7 +143,8 @@ func (jfs JobFlowSteps) GetJobFlowStepsInput() (*emr.AddJobFlowStepsInput, error
 		}
 
 		if !StringInSlice(step.ActionOnFailure, allowedActions) {
-			return nil, errors.New("Only the following failure actions are allowed '" + strings.Join(allowedActions, ", ") + "' - to terminate use the 'down' command")
+			return nil, errors.New("Only the following failure actions are allowed '" +
+				strings.Join(allowedActions, ", ") + "' - to terminate use the 'down' command")
 		}
 
 		stepConfig := emr.StepConfig{
