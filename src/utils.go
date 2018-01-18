@@ -14,9 +14,12 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"io/ioutil"
+	"os"
+	"path/filepath"
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds"
@@ -50,11 +53,6 @@ func isEnv(key string) bool {
 	return key == "env"
 }
 
-// FilePathToByteArray reads a file into a byte[]
-func FilePathToByteArray(filePath string) ([]byte, error) {
-	return ioutil.ReadFile(filePath)
-}
-
 // InterfaceToJSONString writes an interface as a JSON
 func InterfaceToJSONString(m interface{}, pretty bool) string {
 	var b []byte
@@ -80,4 +78,43 @@ func StringInSlice(a string, list []string) bool {
 		}
 	}
 	return false
+}
+
+// ReadGzFile reads a gzipped file
+func ReadGzFile(filename string) (string, error) {
+	fi, err := os.Open(filename)
+	if err != nil {
+		return "", err
+	}
+	defer fi.Close()
+
+	fz, err := gzip.NewReader(fi)
+	if err != nil {
+		return "", err
+	}
+	defer fz.Close()
+
+	s, err := ioutil.ReadAll(fz)
+	if err != nil {
+		return "", err
+	}
+	return string(s[:]), nil
+}
+
+// ReadGzFiles lists the files in dir and return their un-gzipped content
+func ReadGzFiles(dir string) (map[string]string, error) {
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	m := make(map[string]string)
+	for _, file := range files {
+		content, err := ReadGzFile(filepath.Join(dir, file.Name()))
+		if err != nil {
+			return nil, err
+		}
+		m[file.Name()] = content
+	}
+	return m, nil
 }

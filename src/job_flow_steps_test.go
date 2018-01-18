@@ -15,16 +15,23 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/emr"
+	"github.com/aws/aws-sdk-go/service/emr/emriface"
 	"github.com/stretchr/testify/assert"
 )
 
-func (m *mockEmrClient) AddJobFlowSteps(input *emr.AddJobFlowStepsInput) (*emr.AddJobFlowStepsOutput, error) {
+type mockEMRAPISteps struct {
+	emriface.EMRAPI
+}
+
+func (m *mockEMRAPISteps) AddJobFlowSteps(input *emr.AddJobFlowStepsInput) (*emr.AddJobFlowStepsOutput, error) {
 	if !strings.HasPrefix(*input.JobFlowId, "j-") {
 		return nil, errors.New("AddJobFlowSteps failed")
 	}
@@ -35,7 +42,7 @@ func (m *mockEmrClient) AddJobFlowSteps(input *emr.AddJobFlowStepsInput) (*emr.A
 
 // Mock using the cluster id of input to set the step State
 // ClusterId = "j-PENDING" will result in a step with the PENDING state
-func (m *mockEmrClient) DescribeStep(input *emr.DescribeStepInput) (*emr.DescribeStepOutput, error) {
+func (m *mockEMRAPISteps) DescribeStep(input *emr.DescribeStepInput) (*emr.DescribeStepOutput, error) {
 	if !strings.HasPrefix(*input.ClusterId, "j-") {
 		return nil, errors.New("DescribeStep failed")
 	}
@@ -64,11 +71,17 @@ func (m *mockEmrClient) DescribeStep(input *emr.DescribeStepInput) (*emr.Describ
 
 func mockJobFlowSteps(playbookConfig PlaybookConfig, jobflowID string) *JobFlowSteps {
 	return &JobFlowSteps{
-		Config:     playbookConfig,
-		JobflowID:  jobflowID,
-		IsBlocking: true,
-		Svc:        &mockEmrClient{},
+		Config:         playbookConfig,
+		JobflowID:      jobflowID,
+		IsBlocking:     true,
+		LogFailedSteps: true,
+		EmrSvc:         &mockEMRAPISteps{},
 	}
+}
+
+func mockJobFlowStepsWithoutPlaybook(jobflowID string) *JobFlowSteps {
+	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil, "")
+	return mockJobFlowSteps(*record, jobflowID)
 }
 
 func TestInitJobFlowSteps(t *testing.T) {
@@ -76,21 +89,21 @@ func TestInitJobFlowSteps(t *testing.T) {
 
 	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil, "")
 
-	jfs, _ := InitJobFlowSteps(*record, "j-id", true)
+	jfs, _ := InitJobFlowSteps(*record, "j-id", true, true)
 	assert.NotNil(jfs)
 
 	record.Credentials.SecretAccessKey = "hello"
-	_, err := InitJobFlowSteps(*record, "j-id", true)
+	_, err := InitJobFlowSteps(*record, "j-id", true, true)
 	assert.NotNil(err)
 	assert.Equal("access-key and secret-key must both be set to 'env', or neither", err.Error())
 
 	record.Credentials.AccessKeyId = "iam"
-	_, err = InitJobFlowSteps(*record, "j-id", true)
+	_, err = InitJobFlowSteps(*record, "j-id", true, true)
 	assert.NotNil(err)
 	assert.Equal("access-key and secret-key must both be set to 'iam', or neither", err.Error())
 
 	record.Credentials.SecretAccessKey = "iam"
-	jfs, _ = InitJobFlowSteps(*record, "j-id", true)
+	jfs, _ = InitJobFlowSteps(*record, "j-id", true, true)
 	assert.NotNil(jfs)
 }
 
@@ -110,8 +123,19 @@ func TestAddJobFlowSteps_Fail(t *testing.T) {
 	assert.NotNil(err)
 	assert.Equal("DescribeStep failed", err.Error())
 
-	// fails if the number of errors is > 0
 	jfs.JobflowID = "j-FAILED"
+	err = jfs.AddJobFlowSteps()
+	assert.NotNil(err)
+	assert.Equal("Couldn't fetch LogUri: DescribeCluster failed", err.Error())
+
+	// fails if the number of errors is > 0
+	stepID := "step-id"
+	jfs.JobflowID = "j-FAILED-gz"
+	tmpDirInput := filepath.Join("tmp-gz", "log", jfs.JobflowID, "steps", stepID)
+	os.MkdirAll(tmpDirInput, 0755)
+	content := "test.gz"
+	filename := "test"
+	WriteGzFile(filename, tmpDirInput, content)
 	err = jfs.AddJobFlowSteps()
 	assert.NotNil(err)
 	assert.Equal("1/1 steps failed to complete successfully", err.Error())
@@ -134,7 +158,7 @@ func TestGetJobFlowStepsInput_Success(t *testing.T) {
 	assert := assert.New(t)
 
 	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil, "")
-	jfs, _ := InitJobFlowSteps(*record, "jobflow-id", true)
+	jfs, _ := InitJobFlowSteps(*record, "jobflow-id", true, true)
 
 	assert.NotNil(jfs)
 
@@ -149,7 +173,7 @@ func TestGetJobFlowStepsInput_Fail(t *testing.T) {
 	assert := assert.New(t)
 
 	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil, "")
-	jfs, _ := InitJobFlowSteps(*record, "jobflow-id", true)
+	jfs, _ := InitJobFlowSteps(*record, "jobflow-id", true, true)
 
 	assert.NotNil(jfs)
 

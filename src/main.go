@@ -38,6 +38,7 @@ const (
 	fEmrCluster      = "emr-cluster"
 	fVars            = "vars"
 	fAsync           = "async"
+	fLogFailedSteps  = "log-failed-steps"
 	fLogLevel        = "log-level"
 	fLock            = "lock"
 	fSoftLock        = "softLock"
@@ -124,6 +125,7 @@ func main() {
 				getVarsFlag(),
 			},
 			Action: func(c *cli.Context) error {
+				logFailedSteps := c.Bool(fLogFailedSteps)
 				async := c.Bool(fAsync)
 				hardLock := c.String(fLock)
 				softLock := c.String(fSoftLock)
@@ -139,7 +141,7 @@ func main() {
 					return exitCodeError(err)
 				}
 
-				err = run(
+				_, err = run(
 					c.String(fEmrPlaybook),
 					c.String(fEmrCluster),
 					async,
@@ -187,6 +189,7 @@ func main() {
 			Flags: []cli.Flag{
 				getEmrConfigFlag(),
 				getEmrPlaybookFlag(),
+				getLogFailedStepsFlag(),
 				getLockFlag(),
 				getSoftLockFlag(),
 				getConsulFlag(),
@@ -195,6 +198,7 @@ func main() {
 			Action: func(c *cli.Context) error {
 				emrConfig := c.String(fEmrConfig)
 				emrPlaybook := c.String(fEmrPlaybook)
+				logFailedSteps := c.Bool(fLogFailedSteps)
 				hardLock := c.String(fLock)
 				softLock := c.String(fSoftLock)
 				consul := c.String(fConsul)
@@ -218,7 +222,7 @@ func main() {
 					return exitCodeError(err1)
 				}
 				log.Info("EMR cluster launched successfully; Jobflow ID: " + jobflowID)
-				err2 := run(emrPlaybook, jobflowID, false, vars)
+				failedStepsIDs, err2 := run(emrPlaybook, jobflowID, false, vars)
 
 				err3 := down(emrConfig, jobflowID, vars)
 				if err3 != nil {
@@ -228,6 +232,23 @@ func main() {
 					return exitCodeError(err3)
 				}
 				log.Info("EMR cluster terminated successfully")
+
+				if logFailedSteps {
+					logsDownloader, err := InitLogsDownloader(jobflowID)
+					if err != nil {
+						log.Error("Couldn't retrieve failed steps' logs: " + err.Error())
+					}
+					for _, stepID := range failedStepsIDs {
+						logs, err := ld.GetStepLogs(stepID)
+						if err != nil {
+							log.Error("Couldn't retrieve logs for step " + stepID + ": " + err.Error())
+						}
+						for filename, content := range logs {
+							log.Info("Content of log file '" + filename + "' for step " + stepID + ":")
+							log.Info(content)
+						}
+					}
+				}
 
 				if err2 != nil {
 					if lock != nil && softLock != "" {
@@ -271,6 +292,13 @@ func getVarsFlag() cli.StringFlag {
 
 func getAsyncFlag() cli.BoolFlag {
 	return cli.BoolFlag{Name: fAsync, Usage: "Asynchronous execution of the jobflow steps"}
+}
+
+func getLogFailedStepsFlag() cli.BoolFlag {
+	return cli.BoolFlag{
+		Name:  fLogFailedSteps,
+		Usage: "Whether or not to retrieve and display the logs for any failed step",
+	}
 }
 
 func getLockFlag() cli.StringFlag {
@@ -334,33 +362,33 @@ func up(emrConfig string, vars string) (string, error) {
 	return jobflowID, nil
 }
 
-// run adds steps to an EMR cluster
-func run(emrPlaybook, emrCluster string, async bool, vars string) error {
+// run adds steps to an EMR cluster and return the failed steps' IDs
+func run(emrPlaybook, emrCluster string, async, logFailedSteps bool, vars string) ([]string, error) {
 	if emrPlaybook == "" {
-		return flagToError(fEmrPlaybook)
+		return nil, flagToError(fEmrPlaybook)
 	}
 	if emrCluster == "" {
-		return flagToError(fEmrCluster)
+		return nil, flagToError(fEmrCluster)
 	}
 
 	varMap, err := varsToMap(vars)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	ar, err := InitConfigResolver()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	playbookRecord, err := ar.ParsePlaybookRecordFromFile(emrPlaybook, varMap)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	jfs, err := InitJobFlowSteps(*playbookRecord, emrCluster, async)
+	jfs, err := InitJobFlowSteps(*playbookRecord, emrCluster, async, logFailedSteps)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	return jfs.AddJobFlowSteps()
