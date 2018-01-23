@@ -118,3 +118,18 @@ func ReadGzFiles(dir string) (map[string]string, error) {
 	}
 	return m, nil
 }
+
+// Diff outputs the difference between two string slices where a is the reference (a - b)
+func Diff(a, b []string) []string {
+	m := make(map[string]bool)
+	for _, s := range a {
+		m[s] = true
+	}
+	d := make([]string, 0)
+	for _, s := range b {
+		if !m[s] {
+			d = append(d, s)
+		}
+	}
+	return d
+}
