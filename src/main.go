@@ -125,7 +125,6 @@ func main() {
 				getVarsFlag(),
 			},
 			Action: func(c *cli.Context) error {
-				logFailedSteps := c.Bool(fLogFailedSteps)
 				async := c.Bool(fAsync)
 				hardLock := c.String(fLock)
 				softLock := c.String(fSoftLock)
@@ -234,12 +233,21 @@ func main() {
 				log.Info("EMR cluster terminated successfully")
 
 				if logFailedSteps {
-					logsDownloader, err := InitLogsDownloader(jobflowID)
+					playbookRecord, err := parsePlaybookRecord(emrPlaybook, jobflowID, vars)
+					if err != nil {
+						log.Error("Couldn't parse playbook record: " + err.Error())
+					}
+					logsDownloader, err := InitLogsDownloader(
+						playbookRecord.Credentials.AccessKeyId,
+						playbookRecord.Credentials.SecretAccessKey,
+						playbookRecord.Region,
+						jobflowID,
+					)
 					if err != nil {
 						log.Error("Couldn't retrieve failed steps' logs: " + err.Error())
 					}
 					for _, stepID := range failedStepsIDs {
-						logs, err := ld.GetStepLogs(stepID)
+						logs, err := logsDownloader.GetStepLogs(stepID)
 						if err != nil {
 							log.Error("Couldn't retrieve logs for step " + stepID + ": " + err.Error())
 						}
@@ -362,8 +370,8 @@ func up(emrConfig string, vars string) (string, error) {
 	return jobflowID, nil
 }
 
-// run adds steps to an EMR cluster and return the failed steps' IDs
-func run(emrPlaybook, emrCluster string, async, logFailedSteps bool, vars string) ([]string, error) {
+// parses the playbook record
+func parsePlaybookRecord(emrPlaybook, emrCluster, vars string) (*PlaybookConfig, error) {
 	if emrPlaybook == "" {
 		return nil, flagToError(fEmrPlaybook)
 	}
@@ -381,12 +389,17 @@ func run(emrPlaybook, emrCluster string, async, logFailedSteps bool, vars string
 		return nil, err
 	}
 
-	playbookRecord, err := ar.ParsePlaybookRecordFromFile(emrPlaybook, varMap)
+	return ar.ParsePlaybookRecordFromFile(emrPlaybook, varMap)
+}
+
+// run adds steps to an EMR cluster and return the failed steps' IDs
+func run(emrPlaybook, emrCluster string, async bool, vars string) ([]string, error) {
+	playbookRecord, err := parsePlaybookRecord(emrPlaybook, emrCluster, vars)
 	if err != nil {
 		return nil, err
 	}
 
-	jfs, err := InitJobFlowSteps(*playbookRecord, emrCluster, async, logFailedSteps)
+	jfs, err := InitJobFlowSteps(*playbookRecord, emrCluster, async)
 	if err != nil {
 		return nil, err
 	}

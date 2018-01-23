@@ -81,7 +81,7 @@ func (ld LogsDownloader) GetStepLogs(stepID string) (map[string]string, error) {
 	if err != nil {
 		return nil, errwrap.Wrapf("Couldn't download step logs: {{err}}", err)
 	}
-	contents, err := ReadGzFiles(dir)
+	contents, err := ReadGzFiles(filepath.Join(dir, ld.JobflowID, "steps", stepID))
 	if err != nil {
 		return nil, errwrap.Wrapf("Coudln't read gzipped log files: {{err}}", err)
 	}
