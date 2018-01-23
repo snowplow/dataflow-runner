@@ -68,6 +68,12 @@ func TestStringInSlice(t *testing.T) {
 	assert.Equal(false, StringInSlice("a", []string{"b", "c"}))
 }
 
+func TestDiff(t *testing.T) {
+	assert := assert.New(t)
+
+	assert.Equal([]string{"a"}, Diff([]string{"b"}, []string{"a", "b"}))
+}
+
 func TestReadGzFile(t *testing.T) {
 	assert := assert.New(t)
 	content := "test"

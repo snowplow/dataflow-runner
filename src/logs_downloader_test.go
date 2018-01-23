@@ -40,8 +40,9 @@ func (m *mockS3API) ListObjectsPages(input *s3.ListObjectsInput, fn func(*s3.Lis
 
 	files, _ := ioutil.ReadDir(filepath.Join(*input.Bucket, *input.Prefix))
 	contents := make([]*s3.Object, len(files))
+	sanitizedPrefix := filepath.Join(strings.Split(*input.Prefix, "/")...)
 	for i, file := range files {
-		contents[i] = &s3.Object{Key: aws.String(file.Name())}
+		contents[i] = &s3.Object{Key: aws.String(filepath.Join(sanitizedPrefix, file.Name()))}
 	}
 	fn(&s3.ListObjectsOutput{Contents: contents}, true)
 	return nil
@@ -62,11 +63,14 @@ func (m *mockEMRAPILogs) DescribeCluster(input *emr.DescribeClusterInput) (*emr.
 	if *input.ClusterId == "test-get-bucket-empty-log-uri" {
 		return &emr.DescribeClusterOutput{Cluster: &emr.Cluster{LogUri: aws.String("")}}, nil
 	}
-	if *input.ClusterId == "test-get-step-logs" || *input.ClusterId == "j-FAILED-gz" {
-		return &emr.DescribeClusterOutput{Cluster: &emr.Cluster{LogUri: aws.String("s3://tmp-gz/log")}}, nil
+	if *input.ClusterId == "test-get-step-logs" {
+		return &emr.DescribeClusterOutput{Cluster: &emr.Cluster{LogUri: aws.String("s3://tmp-gz/log")}},
+			nil
 	}
 	if *input.ClusterId == "test-get-step-logs-fail" {
-		return &emr.DescribeClusterOutput{Cluster: &emr.Cluster{LogUri: aws.String("s3://tmp-error/log")}}, nil
+		return &emr.DescribeClusterOutput{
+			Cluster: &emr.Cluster{LogUri: aws.String("s3://tmp-error/log")},
+		}, nil
 	}
 	return nil, errors.New("DescribeCluster failed")
 }
@@ -74,10 +78,22 @@ func (m *mockEMRAPILogs) DescribeCluster(input *emr.DescribeClusterInput) (*emr.
 func mockLogsDownloader(jobflowID string) *LogsDownloader {
 	return &LogsDownloader{
 		JobflowID:  jobflowID,
-		EmrSvc:     &mockEMRAPISteps{},
+		EmrSvc:     &mockEMRAPILogs{},
 		S3Svc:      &mockS3API{},
 		Downloader: &mockDownloaderAPI{},
 	}
+}
+func TestInitLogsDownloader(t *testing.T) {
+	assert := assert.New(t)
+
+	ld, err := InitLogsDownloader("env", "env", "eu-west-1", "j-ID")
+	assert.NotNil(ld)
+	assert.Nil(err)
+
+	ld, err = InitLogsDownloader("env", "nv", "eu-west-1", "j-ID")
+	assert.Nil(ld)
+	assert.NotNil(err)
+	assert.Equal("access-key and secret-key must both be set to 'env', or neither", err.Error())
 }
 
 func TestGetStepLogs(t *testing.T) {
@@ -88,13 +104,13 @@ func TestGetStepLogs(t *testing.T) {
 	tmpDirInput := filepath.Join("tmp-gz", "log", jobflowID, "steps", stepID)
 	os.MkdirAll(tmpDirInput, 0755)
 	ld := mockLogsDownloader(jobflowID)
-	content := "test.gz"
+	content := filepath.Join("log", jobflowID, "steps", stepID, "test.gz")
 	filename := "test"
 	WriteGzFile(filename, tmpDirInput, content)
 
 	contents, err := ld.GetStepLogs(stepID)
-	assert.NotNil(contents)
 	assert.Nil(err)
+	assert.NotNil(contents)
 	assert.Equal(map[string]string{filename + ".gz": content}, contents)
 
 	os.RemoveAll(tmpDirInput)
@@ -136,10 +152,11 @@ func TestDownloadLogFiles(t *testing.T) {
 	err := ld.DownloadLogFiles(tmpDirInput, prefix, tmpDirOutput, stepID)
 
 	// the mock just writes the file name
-	content, err := ioutil.ReadFile(filepath.Join(tmpDirOutput, filename))
+	content, err :=
+		ioutil.ReadFile(filepath.Join(tmpDirOutput, prefix, jobflowID, "steps", stepID, filename))
 	assert.Nil(err)
 	assert.NotNil(content)
-	assert.Equal(filename, string(content[:]))
+	assert.Equal(filepath.Join(prefix, jobflowID, "steps", stepID, filename), string(content[:]))
 
 	os.RemoveAll(tmpDirInput)
 	os.RemoveAll(tmpDirOutput)

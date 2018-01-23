@@ -18,6 +18,7 @@ package main
 import (
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -118,6 +119,7 @@ func main() {
 			Flags: []cli.Flag{
 				getEmrPlaybookFlag(),
 				getEmrClusterFlag(),
+				getLogFailedStepsFlag(),
 				getAsyncFlag(),
 				getLockFlag(),
 				getSoftLockFlag(),
@@ -125,11 +127,14 @@ func main() {
 				getVarsFlag(),
 			},
 			Action: func(c *cli.Context) error {
+				emrPlaybook := c.String(fEmrPlaybook)
+				jobflowID := c.String(fEmrCluster)
 				logFailedSteps := c.Bool(fLogFailedSteps)
 				async := c.Bool(fAsync)
 				hardLock := c.String(fLock)
 				softLock := c.String(fSoftLock)
 				consul := c.String(fConsul)
+				vars := c.String(fVars)
 
 				err := checkLockFlags(async, hardLock, softLock, consul)
 				if err != nil {
@@ -141,12 +146,18 @@ func main() {
 					return exitCodeError(err)
 				}
 
-				_, err = run(
-					c.String(fEmrPlaybook),
-					c.String(fEmrCluster),
-					async,
-					c.String(fVars),
-				)
+				failedStepsIDs, err := run(emrPlaybook, jobflowID, async, vars)
+
+				if logFailedSteps && len(failedStepsIDs) > 0 {
+					// Here we can't leverage the time spent downing the cluster to make sure log files have
+					// been rotated. As a result, we just sleep.
+					sleep := 300
+					log.Info("Sleeping for " + strconv.Itoa(sleep) +
+						" seconds waiting for the logs to be rotated")
+					time.Sleep(time.Second * time.Duration(sleep))
+					displayFailedStepsLogs(failedStepsIDs, emrPlaybook, jobflowID, vars)
+				}
+
 				if err != nil {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
@@ -233,21 +244,8 @@ func main() {
 				}
 				log.Info("EMR cluster terminated successfully")
 
-				if logFailedSteps {
-					logsDownloader, err := InitLogsDownloader(jobflowID)
-					if err != nil {
-						log.Error("Couldn't retrieve failed steps' logs: " + err.Error())
-					}
-					for _, stepID := range failedStepsIDs {
-						logs, err := ld.GetStepLogs(stepID)
-						if err != nil {
-							log.Error("Couldn't retrieve logs for step " + stepID + ": " + err.Error())
-						}
-						for filename, content := range logs {
-							log.Info("Content of log file '" + filename + "' for step " + stepID + ":")
-							log.Info(content)
-						}
-					}
+				if logFailedSteps && len(failedStepsIDs) > 0 {
+					displayFailedStepsLogs(failedStepsIDs, emrPlaybook, jobflowID, vars)
 				}
 
 				if err2 != nil {
@@ -362,8 +360,35 @@ func up(emrConfig string, vars string) (string, error) {
 	return jobflowID, nil
 }
 
-// run adds steps to an EMR cluster and return the failed steps' IDs
-func run(emrPlaybook, emrCluster string, async, logFailedSteps bool, vars string) ([]string, error) {
+// log the failed steps by printing out the different log files for each failed step
+func displayFailedStepsLogs(failedStepsIDs []string, emrPlaybook, jobflowID, vars string) {
+	playbookRecord, err := parsePlaybookRecord(emrPlaybook, jobflowID, vars)
+	if err != nil {
+		log.Error("Couldn't parse playbook record: " + err.Error())
+	}
+	logsDownloader, err := InitLogsDownloader(
+		playbookRecord.Credentials.AccessKeyId,
+		playbookRecord.Credentials.SecretAccessKey,
+		playbookRecord.Region,
+		jobflowID,
+	)
+	if err != nil {
+		log.Error("Couldn't retrieve failed steps' logs: " + err.Error())
+	}
+	for _, stepID := range failedStepsIDs {
+		logs, err := logsDownloader.GetStepLogs(stepID)
+		if err != nil {
+			log.Error("Couldn't retrieve logs for step " + stepID + ": " + err.Error())
+		}
+		for filename, content := range logs {
+			log.Info("Content of log file '" + filename + "' for step " + stepID + ":")
+			log.Info(content)
+		}
+	}
+}
+
+// parses a playbook record
+func parsePlaybookRecord(emrPlaybook, emrCluster, vars string) (*PlaybookConfig, error) {
 	if emrPlaybook == "" {
 		return nil, flagToError(fEmrPlaybook)
 	}
@@ -381,12 +406,17 @@ func run(emrPlaybook, emrCluster string, async, logFailedSteps bool, vars string
 		return nil, err
 	}
 
-	playbookRecord, err := ar.ParsePlaybookRecordFromFile(emrPlaybook, varMap)
+	return ar.ParsePlaybookRecordFromFile(emrPlaybook, varMap)
+}
+
+// run adds steps to an EMR cluster and return the failed steps' IDs
+func run(emrPlaybook, emrCluster string, async bool, vars string) ([]string, error) {
+	playbookRecord, err := parsePlaybookRecord(emrPlaybook, emrCluster, vars)
 	if err != nil {
 		return nil, err
 	}
 
-	jfs, err := InitJobFlowSteps(*playbookRecord, emrCluster, async, logFailedSteps)
+	jfs, err := InitJobFlowSteps(*playbookRecord, emrCluster, async)
 	if err != nil {
 		return nil, err
 	}

@@ -24,6 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/emr"
 	"github.com/aws/aws-sdk-go/service/emr/emriface"
+	"github.com/hashicorp/errwrap"
 )
 
 // JobFlowSteps is used for adding steps to an existing cluster
@@ -55,8 +56,8 @@ func InitJobFlowSteps(playbookConfig PlaybookConfig, jobflowID string, isAsync b
 	}, nil
 }
 
-// AddJobFlowSteps builds the parameters and then submits them to
-// the running EMR cluster, returns the ids of the failed steps
+// AddJobFlowSteps builds the parameters and then submits them to the running EMR cluster, returns
+// the ids of the failed steps
 func (jfs JobFlowSteps) AddJobFlowSteps() ([]string, error) {
 	params, err := jfs.GetJobFlowStepsInput()
 	if err != nil {
@@ -64,11 +65,12 @@ func (jfs JobFlowSteps) AddJobFlowSteps() ([]string, error) {
 	}
 
 	done := false
-	successCount := 0
 	errorCount := 0
 	failedStepsIDs := []string{}
+	historicalInfoLogs := []string{}
+	historicalErrorLogs := []string{}
 
-	resp, err := jfs.EmrSvc.AddJobFlowSteps(params)
+	addJobFlowStepsOutput, err := jfs.EmrSvc.AddJobFlowSteps(params)
 	if err != nil {
 		return nil, err
 	}
@@ -77,38 +79,27 @@ func (jfs JobFlowSteps) AddJobFlowSteps() ([]string, error) {
 		" steps to the EMR cluster with jobflow id '" + jfs.JobflowID + "'...")
 
 	for done == false && jfs.IsBlocking == true {
-
-		for _, stepID := range resp.StepIds {
-			params1 := &emr.DescribeStepInput{
-				ClusterId: aws.String(jfs.JobflowID),
-				StepId:    stepID,
-			}
-
-			resp1, err := jfs.EmrSvc.DescribeStep(params1)
-			if err != nil {
-				return nil, err
-			}
-
-			if *resp1.Step.Status.State == "COMPLETED" {
-				log.Info("Step '" + *resp1.Step.Name + "' with id '" +
-					*resp1.Step.Id + "' completed successfully")
-				successCount++
-			} else if *resp1.Step.Status.State == "CANCELLED" || *resp1.Step.Status.State == "FAILED" {
-				log.Error("Step '" + *resp1.Step.Name + "' with id '" +
-					*resp1.Step.Id + "' was " + *resp1.Step.Status.State)
-				errorCount++
-				if *resp1.Step.Status.State == "FAILED" {
-					failedStepsIDs = append(failedStepsIDs, *resp1.Step.Id)
-				}
-			}
+		successCount, errCount, fStepsIDs, infoLogs, errorLogs, err :=
+			jfs.RetrieveStepsStates(addJobFlowStepsOutput)
+		if err != nil {
+			return nil, err
 		}
+		errorCount = errCount
 
-		if (successCount + errorCount) == len(resp.StepIds) {
+		for _, l := range Diff(historicalInfoLogs, infoLogs) {
+			log.Info(l)
+		}
+		for _, l := range Diff(historicalErrorLogs, errorLogs) {
+			log.Error(l)
+		}
+		historicalInfoLogs = infoLogs
+		historicalErrorLogs = errorLogs
+
+		if (successCount + errorCount) == len(addJobFlowStepsOutput.StepIds) {
 			done = true
+			failedStepsIDs = fStepsIDs
 		} else {
 			time.Sleep(time.Second * 15)
-			successCount = 0
-			errorCount = 0
 			failedStepsIDs = []string{}
 		}
 	}
@@ -117,7 +108,60 @@ func (jfs JobFlowSteps) AddJobFlowSteps() ([]string, error) {
 		return nil, nil
 	}
 	return failedStepsIDs, errors.New("" + strconv.Itoa(errorCount) + "/" +
-		strconv.Itoa(len(resp.StepIds)) + " steps failed to complete successfully")
+		strconv.Itoa(len(addJobFlowStepsOutput.StepIds)) + " steps failed to complete successfully")
+}
+
+// RetrieveStepsStates retrieves the states of all the steps for a job flow returning the state
+// of every step as well as information about success or failure for each one
+func (jfs JobFlowSteps) RetrieveStepsStates(addJobFlowStepsOutput *emr.AddJobFlowStepsOutput) (int, int, []string, []string, []string, error) {
+	infoLogs := make([]string, 0)
+	errorLogs := make([]string, 0)
+	failedStepsIDs := make([]string, 0)
+	successCount := 0
+	errorCount := 0
+	for _, stepID := range addJobFlowStepsOutput.StepIds {
+		state, logs, err := jfs.RetrieveStepState(*stepID)
+		if err != nil {
+			return 0, 0, nil, nil, nil, err
+		}
+		if state == "COMPLETED" {
+			infoLogs = append(infoLogs, logs...)
+			successCount++
+		}
+		if state == "FAILED" || state == "CANCELLED" {
+			errorLogs = append(errorLogs, logs...)
+			errorCount++
+			if state == "FAILED" {
+				failedStepsIDs = append(failedStepsIDs, *stepID)
+			}
+		}
+	}
+	return successCount, errorCount, failedStepsIDs, infoLogs, errorLogs, nil
+}
+
+// RetrieveStepState retrieves the state of a particular step, optionally retrieving the logs if
+// it failed, also returns the step status
+func (jfs JobFlowSteps) RetrieveStepState(stepID string) (string, []string, error) {
+	describeStepInput := &emr.DescribeStepInput{
+		ClusterId: aws.String(jfs.JobflowID),
+		StepId:    aws.String(stepID),
+	}
+	dso, err := jfs.EmrSvc.DescribeStep(describeStepInput)
+	if err != nil {
+		return "", nil, errwrap.Wrapf("Couldn't retrieve step "+stepID+" state: {{err}}", err)
+	}
+
+	if *dso.Step.Status.State == "COMPLETED" {
+		infoLogs := []string{
+			"Step '" + *dso.Step.Name + "' with id '" + *dso.Step.Id + "' completed successfully"}
+		return *dso.Step.Status.State, infoLogs, nil
+	} else if *dso.Step.Status.State == "CANCELLED" || *dso.Step.Status.State == "FAILED" {
+		errorLogs := make([]string, 0)
+		errorLogs = append(errorLogs,
+			"Step '"+*dso.Step.Name+"' with id '"+*dso.Step.Id+"' was "+*dso.Step.Status.State)
+		return *dso.Step.Status.State, errorLogs, nil
+	}
+	return *dso.Step.Status.State, nil, nil
 }
 
 // GetJobFlowStepsInput parses the config given to it and
