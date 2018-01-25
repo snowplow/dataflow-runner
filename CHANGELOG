@@ -1,3 +1,9 @@
+Version 0.4.0 (2018-01-25)
+--------------------------
+Add option to fetch logs of failing jobflow step (#40)
+Reduce repetition in jobflow step logging (#39)
+Bump consul to 1.0.2 in .travis.yml (#42)
+
 Version 0.3.0 (2017-05-30)
 --------------------------
 Short-circuit execution on unset variable (#16)
