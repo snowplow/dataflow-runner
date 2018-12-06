@@ -215,7 +215,17 @@ func main() {
 				consul := c.String(fConsul)
 				vars := c.String(fVars)
 
-				err := checkLockFlags(false, hardLock, softLock, consul)
+				clusterRecord, err := parseClusterRecord(emrConfig, vars)
+				if err != nil {
+					return exitCodeError(err)
+				}
+
+				playbookRecord, err := parsePlaybookRecord(emrPlaybook, vars)
+				if err != nil {
+					return exitCodeError(err)
+				}
+
+				err = checkLockFlags(false, hardLock, softLock, consul)
 				if err != nil {
 					return exitCodeError(err)
 				}
@@ -225,7 +235,7 @@ func main() {
 					return exitCodeError(err)
 				}
 
-				jobflowID, err1 := up(emrConfig, vars)
+				jobflowID, err1 := upWithConfig(clusterRecord)
 				if err1 != nil {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
@@ -233,9 +243,9 @@ func main() {
 					return exitCodeError(err1)
 				}
 				log.Info("EMR cluster launched successfully; Jobflow ID: " + jobflowID)
-				failedStepsIDs, err2 := run(emrPlaybook, jobflowID, false, vars)
+				failedStepsIDs, err2 := runWithConfig(playbookRecord, jobflowID, false)
 
-				err3 := down(emrConfig, jobflowID, vars)
+				err3 := downWithConfig(clusterRecord, jobflowID)
 				if err3 != nil {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
@@ -329,25 +339,15 @@ func getConsulFlag() cli.StringFlag {
 
 // up launches a new EMR cluster
 func up(emrConfig string, vars string) (string, error) {
-	if emrConfig == "" {
-		return "", flagToError(fEmrConfig)
-	}
-
-	varMap, err := varsToMap(vars)
+	clusterRecord, err := parseClusterRecord(emrConfig, vars)
 	if err != nil {
-		return "", err
+		return "", nil
 	}
 
-	ar, err := InitConfigResolver()
-	if err != nil {
-		return "", err
-	}
+	return upWithConfig(clusterRecord)
+}
 
-	clusterRecord, err := ar.ParseClusterRecordFromFile(emrConfig, varMap)
-	if err != nil {
-		return "", err
-	}
-
+func upWithConfig(clusterRecord *ClusterConfig) (string, error) {
 	ec, err := InitEmrCluster(*clusterRecord)
 	if err != nil {
 		return "", err
@@ -362,7 +362,7 @@ func up(emrConfig string, vars string) (string, error) {
 
 // log the failed steps by printing out the different log files for each failed step
 func displayFailedStepsLogs(failedStepsIDs []string, emrPlaybook, jobflowID, vars string) {
-	playbookRecord, err := parsePlaybookRecord(emrPlaybook, jobflowID, vars)
+	playbookRecord, err := parsePlaybookRecord(emrPlaybook, vars)
 	if err != nil {
 		log.Error("Couldn't parse playbook record: " + err.Error())
 	}
@@ -387,35 +387,17 @@ func displayFailedStepsLogs(failedStepsIDs []string, emrPlaybook, jobflowID, var
 	}
 }
 
-// parses a playbook record
-func parsePlaybookRecord(emrPlaybook, emrCluster, vars string) (*PlaybookConfig, error) {
-	if emrPlaybook == "" {
-		return nil, flagToError(fEmrPlaybook)
-	}
-	if emrCluster == "" {
-		return nil, flagToError(fEmrCluster)
-	}
-
-	varMap, err := varsToMap(vars)
-	if err != nil {
-		return nil, err
-	}
-
-	ar, err := InitConfigResolver()
-	if err != nil {
-		return nil, err
-	}
-
-	return ar.ParsePlaybookRecordFromFile(emrPlaybook, varMap)
-}
-
 // run adds steps to an EMR cluster and return the failed steps' IDs
 func run(emrPlaybook, emrCluster string, async bool, vars string) ([]string, error) {
-	playbookRecord, err := parsePlaybookRecord(emrPlaybook, emrCluster, vars)
+	playbookRecord, err := parsePlaybookRecord(emrPlaybook, vars)
 	if err != nil {
 		return nil, err
 	}
 
+	return runWithConfig(playbookRecord, emrCluster, async)
+}
+
+func runWithConfig(playbookRecord *PlaybookConfig, emrCluster string, async bool) ([]string, error) {
 	jfs, err := InitJobFlowSteps(*playbookRecord, emrCluster, async)
 	if err != nil {
 		return nil, err
@@ -448,6 +430,10 @@ func down(emrConfig string, emrCluster string, vars string) error {
 		return err
 	}
 
+	return downWithConfig(clusterRecord, emrCluster)
+}
+
+func downWithConfig(clusterRecord *ClusterConfig, emrCluster string) error {
 	ec, err := InitEmrCluster(*clusterRecord)
 	if err != nil {
 		return err
@@ -534,4 +520,42 @@ func initLock(hardLock, softLock, consul string) (Lock, error) {
 		}
 	}
 	return lock, nil
+}
+
+// parses a playbook record
+func parsePlaybookRecord(emrPlaybook, vars string) (*PlaybookConfig, error) {
+	if emrPlaybook == "" {
+		return nil, flagToError(fEmrPlaybook)
+	}
+
+	varMap, err := varsToMap(vars)
+	if err != nil {
+		return nil, err
+	}
+
+	ar, err := InitConfigResolver()
+	if err != nil {
+		return nil, err
+	}
+
+	return ar.ParsePlaybookRecordFromFile(emrPlaybook, varMap)
+}
+
+// parses a cluster record
+func parseClusterRecord(emrConfig, vars string) (*ClusterConfig, error) {
+	if emrConfig == "" {
+		return nil, flagToError(fEmrConfig)
+	}
+
+	varMap, err := varsToMap(vars)
+	if err != nil {
+		return nil, err
+	}
+
+	ar, err := InitConfigResolver()
+	if err != nil {
+		return nil, err
+	}
+
+	return ar.ParseClusterRecordFromFile(emrConfig, varMap)
 }
