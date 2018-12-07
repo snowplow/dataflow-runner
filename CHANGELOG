@@ -1,3 +1,10 @@
+Version 0.4.1 (2018-12-13)
+--------------------------
+Load configuration files eagerly during run-transient (#47)
+Bump consul to 1.4.0 in .travis.yml (#52)
+Retrieve go-windows-terminal-sequences dependency during windows build (#51)
+Move from jteeuwen/go-bindata to go-bindata/go-bindata (#49)
+
 Version 0.4.0 (2018-02-15)
 --------------------------
 Add option to fetch logs of failing jobflow step (#40)
