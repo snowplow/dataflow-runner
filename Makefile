@@ -74,6 +74,7 @@ $(build_log): $(merge_log)
 	go get -u github.com/mitchellh/gox/...
 	gox -osarch=linux/amd64 -output=$(bin_linux) ./$(merge_src_dir)
 	gox -osarch=darwin/amd64 -output=$(bin_darwin) ./$(merge_src_dir)
+	go get github.com/konsorten/go-windows-terminal-sequences || true
 	gox -osarch=windows/amd64 -output=$(bin_windows) ./$(merge_src_dir)
 
 	@echo Build success at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(build_log);
