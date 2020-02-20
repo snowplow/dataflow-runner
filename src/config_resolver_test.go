@@ -213,7 +213,7 @@ func TestTemplateRawBytes_timeWithFormat(t *testing.T) {
 	assert.Nil(templatedByteArr)
 	assert.NotNil(err)
 	assert.Equal(`template: `+templateName+`:1:10: executing "`+templateName+
-		`" at <timeWithFormat "qwer...>: error calling timeWithFormat: strconv.ParseInt: parsing "qwerty": invalid syntax`, err.Error())
+		`" at <timeWithFormat "qwerty" "2006">: error calling timeWithFormat: strconv.ParseInt: parsing "qwerty": invalid syntax`, err.Error())
 }
 
 func TestTemplateRawBytes_systemEnv(t *testing.T) {
@@ -235,7 +235,7 @@ func TestTemplateRawBytes_systemEnv(t *testing.T) {
 	assert.Nil(templatedByteArr)
 	assert.Equal(
 		`template: `+templateName+`:1:10: executing "`+templateName+
-			`" at <systemEnv "DOESNT_EX...>: error calling systemEnv: environment variable DOESNT_EXIST not set`,
+			`" at <systemEnv "DOESNT_EXIST">: error calling systemEnv: environment variable DOESNT_EXIST not set`,
 		err.Error())
 }
 
@@ -272,7 +272,7 @@ func TestTemplateRawBytes_base64File(t *testing.T) {
 	assert.Nil(templatedByteArr)
 	assert.Equal(
 		`template: `+templateName+`:1:10: executing "`+templateName+
-			`" at <base64File "/tmp/doe...>: error calling base64File: open /tmp/doesnt/exist: no such file or directory`,
+			`" at <base64File "/tmp/doesnt/exist">: error calling base64File: open /tmp/doesnt/exist: no such file or directory`,
 		err.Error())
 }
 

@@ -1,6 +1,6 @@
 language: go
 go:
-  - 1.8
+  - 1.13
 
 before_script:
   - wget https://releases.hashicorp.com/consul/1.4.0/consul_1.4.0_linux_amd64.zip
@@ -19,7 +19,7 @@ deploy:
   provider: script
   script: make release
   on:
-    condition: '"${TRAVIS_GO_VERSION}" == "1.8"' 
+    condition: '"${TRAVIS_GO_VERSION}" == "1.13"' 
     tags: true
 
 env:
