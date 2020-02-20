@@ -469,13 +469,6 @@ func TestGetApplications_WithApps(t *testing.T) {
 	assert.Len(apps, 2)
 	assert.Equal(aws.String("Hadoop"), apps[0].Name)
 	assert.Equal(aws.String("Spark"), apps[1].Name)
-
-	// fails is the app is not allowed
-	record.Applications = []string{"Snowplow"}
-	ec, _ = InitEmrCluster(*record)
-	_, err := ec.GetApplications()
-	assert.NotNil(err)
-	assert.Equal("Only Hadoop, Hive, Mahout, Pig, Spark are allowed applications", err.Error())
 }
 
 func TestGetLocation_Fail(t *testing.T) {

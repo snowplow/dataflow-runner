@@ -17,7 +17,6 @@ import (
 	"errors"
 	"math/rand"
 	"strconv"
-	"strings"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
@@ -368,7 +367,7 @@ func (ec EmrCluster) GetBootstrapActions() []*emr.BootstrapActionConfig {
 			}
 
 			emrBootstrapAction := emr.BootstrapActionConfig{
-				Name: aws.String(bootstrapAction.Name),
+				Name:                  aws.String(bootstrapAction.Name),
 				ScriptBootstrapAction: &emrScriptBootstrapAction,
 			}
 
@@ -411,22 +410,14 @@ func (ec EmrCluster) GetApplications() ([]*emr.Application, error) {
 	applications := ec.Config.Applications
 
 	var emrApplicationArr []*emr.Application
-	allowedApps := []string{"Hadoop", "Hive", "Mahout", "Pig", "Spark"}
-
 	if applications != nil && len(applications) > 0 {
 		emrApplicationArr = make([]*emr.Application, len(applications))
 
 		for i, application := range applications {
-			if StringInSlice(application, allowedApps) {
-				emrApplication := emr.Application{
-					Name: aws.String(application),
-				}
-
-				emrApplicationArr[i] = &emrApplication
-			} else {
-				return nil, errors.New("Only " + strings.Join(allowedApps, ", ") +
-					" are allowed applications")
+			emrApplication := emr.Application{
+				Name: aws.String(application),
 			}
+			emrApplicationArr[i] = &emrApplication
 		}
 	}
 
