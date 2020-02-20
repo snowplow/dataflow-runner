@@ -341,7 +341,7 @@ func getConsulFlag() cli.StringFlag {
 func up(emrConfig string, vars string) (string, error) {
 	clusterRecord, err := parseClusterRecord(emrConfig, vars)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 
 	return upWithConfig(clusterRecord)
