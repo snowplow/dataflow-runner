@@ -25,13 +25,14 @@ import (
 )
 
 func makeClient(t *testing.T) (*api.Client, *testutil.TestServer) {
-	// Make client config
-	conf := api.DefaultConfig()
 	// Create server
-	server, err := testutil.NewTestServerConfigT(t, nil)
+	server, err := testutil.NewTestServerT(t)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Make client config
+	conf := api.DefaultConfig()
 	conf.Address = server.HTTPAddr
 
 	// Create client

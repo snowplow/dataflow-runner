@@ -45,7 +45,7 @@ func InitEmrCluster(clusterConfig ClusterConfig) (*EmrCluster, error) {
 		return nil, err
 	}
 
-	svc := emr.New(session.New(), &aws.Config{
+	svc := emr.New(session.Must(session.NewSession()), &aws.Config{
 		Region:      aws.String(clusterConfig.Region),
 		Credentials: creds,
 	})

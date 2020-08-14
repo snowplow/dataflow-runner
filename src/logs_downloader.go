@@ -46,12 +46,14 @@ func InitLogsDownloader(accessKeyID, secretAccessKey, region, jobflowID string) 
 		return nil, err
 	}
 
-	emrSvc := emr.New(session.New(), &aws.Config{
+	sess := session.Must(session.NewSession())
+
+	emrSvc := emr.New(sess, &aws.Config{
 		Region:      aws.String(region),
 		Credentials: creds,
 	})
 
-	s3Svc := s3.New(session.New(), &aws.Config{
+	s3Svc := s3.New(sess, &aws.Config{
 		Region:      aws.String(region),
 		Credentials: creds,
 	})
