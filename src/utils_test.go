@@ -38,11 +38,20 @@ func TestGetCredentialsProvider(t *testing.T) {
 	assert.NotNil(err)
 	assert.Equal("access-key and secret-key must both be set to 'env', or neither", err.Error())
 
+	res, err = GetCredentialsProvider("default", "faulty")
+	assert.Nil(res)
+	assert.NotNil(err)
+	assert.Equal("access-key and secret-key must both be set to 'default', or neither", err.Error())
+
 	res, err = GetCredentialsProvider("iam", "iam")
 	assert.NotNil(res)
 	assert.Nil(err)
 
 	res, err = GetCredentialsProvider("env", "env")
+	assert.NotNil(res)
+	assert.Nil(err)
+
+	res, err = GetCredentialsProvider("default", "default")
 	assert.NotNil(res)
 	assert.Nil(err)
 

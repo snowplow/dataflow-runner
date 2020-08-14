@@ -23,21 +23,29 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds"
+	"github.com/aws/aws-sdk-go/aws/defaults"
 )
 
 // GetCredentialsProvider attempts to fetch credentials from either:
 // 1. IAM Role
 // 2. ENV Variables
-// 3. Static Credentials
+// 3. Default Credential Chain
+// 4. Static Credentials
 func GetCredentialsProvider(a string, s string) (*credentials.Credentials, error) {
 	if isIam(a) && isIam(s) {
 		return credentials.NewCredentials(&ec2rolecreds.EC2RoleProvider{}), nil
-	} else if isIam(a) || isIam(s) {
-		return nil, errors.New("access-key and secret-key must both be set to 'iam', or neither")
 	} else if isEnv(a) && isEnv(s) {
 		return credentials.NewEnvCredentials(), nil
+	} else if isDefault(a) && isDefault(s) {
+		cfg := defaults.Config()
+		handlers := defaults.Handlers()
+		return defaults.CredChain(cfg, handlers), nil
+	} else if isIam(a) || isIam(s) {
+		return nil, errors.New("access-key and secret-key must both be set to 'iam', or neither")
 	} else if isEnv(a) || isEnv(s) {
 		return nil, errors.New("access-key and secret-key must both be set to 'env', or neither")
+	} else if isDefault(a) || isDefault(s) {
+		return nil, errors.New("access-key and secret-key must both be set to 'default', or neither")
 	} else {
 		return credentials.NewStaticCredentials(a, s, ""), nil
 	}
@@ -51,6 +59,11 @@ func isIam(key string) bool {
 // isEnv checks whether or not a variable is asking for env
 func isEnv(key string) bool {
 	return key == "env"
+}
+
+// isDefault checks whether or not a variable is asking for default
+func isDefault(key string) bool {
+	return key == "default"
 }
 
 // InterfaceToJSONString writes an interface as a JSON

@@ -43,7 +43,7 @@ func InitJobFlowSteps(playbookConfig PlaybookConfig, jobflowID string, isAsync b
 		return nil, err
 	}
 
-	emrSvc := emr.New(session.New(), &aws.Config{
+	emrSvc := emr.New(session.Must(session.NewSession()), &aws.Config{
 		Region:      aws.String(playbookConfig.Region),
 		Credentials: creds,
 	})
