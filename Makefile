@@ -66,15 +66,15 @@ $(merge_log): $(go_gen_files) $(go_src_files) $(go_test_files)
 	cp $(go_src_files) $(merge_src_dir)
 	cp $(go_test_files) $(merge_src_dir)
 
-	go get -u -t ./$(merge_src_dir)
+	GO111MODULE=on go get -t ./$(merge_src_dir)
 
 	@echo Source merged at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(merge_log);
 
 $(build_log): $(merge_log)
-	go get -u github.com/mitchellh/gox/...
+	GO111MODULE=on go get github.com/mitchellh/gox
 	gox -osarch=linux/amd64 -output=$(bin_linux) ./$(merge_src_dir)
 	gox -osarch=darwin/amd64 -output=$(bin_darwin) ./$(merge_src_dir)
-	go get github.com/konsorten/go-windows-terminal-sequences || true
+	GO111MODULE=on go get github.com/konsorten/go-windows-terminal-sequences || true
 	gox -osarch=windows/amd64 -output=$(bin_windows) ./$(merge_src_dir)
 
 	@echo Build success at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(build_log);
@@ -84,11 +84,11 @@ $(build_log): $(merge_log)
 # -----------------------------------------------------------------------------
 
 format:
-	go fmt ./$(src_dir)
+	GO111MODULE=on go fmt ./$(src_dir)
 	gofmt -s -w ./$(src_dir)
 
 lint:
-	go get -u github.com/golang/lint/golint
+	GO111MODULE=on go get -u golang.org/x/lint/golint
 	golint ./$(src_dir)
 
 # -----------------------------------------------------------------------------
@@ -97,17 +97,16 @@ lint:
 
 test: $(merge_log)
 	mkdir -p $(coverage_dir)
-	go get -u golang.org/x/tools/cmd/cover/...
-	go test ./$(merge_src_dir) -tags test -v -covermode=count -coverprofile=$(coverage_out)
+	GO111MODULE=on go test -parallel=1 ./$(merge_src_dir) -tags test -v -covermode=count -coverprofile=$(coverage_out)
 
 	grep -v 'data_generated.go\|schema_generated.go' $(coverage_out) > $(coverage_out)2
 	mv $(coverage_out)2 $(coverage_out)
 	sed -i 's/github.com\/snowplow\/dataflow-runner\/build/github.com\/snowplow\/dataflow-runner/g' $(coverage_out)
 
-	go tool cover -html=$(coverage_out) -o $(coverage_html)
+	GO111MODULE=on go tool cover -html=$(coverage_out) -o $(coverage_html)
 
 goveralls: test
-	go get -u github.com/mattn/goveralls/...
+	GO111MODULE=on go get -u github.com/mattn/goveralls/...
 	goveralls -coverprofile=$(coverage_out) -service=travis-ci
 
 # -----------------------------------------------------------------------------
@@ -151,10 +150,10 @@ $(depend_log): $(cluster_avsc) $(playbook_avsc)
 
 	wget -N $(codegen_link) -O $(codegen)
 
-	go get -u github.com/elodina/go-avro/...
-	go run $(codegen) --schema $(cluster_avsc) --schema $(playbook_avsc) --out $(generated_schema)
+	GO111MODULE=on go get -u github.com/elodina/go-avro/...
+	GO111MODULE=on go run $(codegen) --schema $(cluster_avsc) --schema $(playbook_avsc) --out $(generated_schema)
 
-	go get -u github.com/go-bindata/go-bindata/...
+	GO111MODULE=on go get -u github.com/go-bindata/go-bindata/...
 	go-bindata -o $(generated_data) $(avro_dir)
 
 	@echo Dependencies generated at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(depend_log);

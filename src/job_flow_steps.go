@@ -19,12 +19,12 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/emr"
 	"github.com/aws/aws-sdk-go/service/emr/emriface"
 	"github.com/hashicorp/errwrap"
+	log "github.com/sirupsen/logrus"
 )
 
 // JobFlowSteps is used for adding steps to an existing cluster
