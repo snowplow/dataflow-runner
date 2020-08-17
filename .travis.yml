@@ -1,18 +1,22 @@
+sudo: required
 language: go
+services:
+  - docker
 go:
   - 1.13
 
 before_script:
-  - wget https://releases.hashicorp.com/consul/1.4.0/consul_1.4.0_linux_amd64.zip
-  - unzip consul_1.4.0_linux_amd64.zip
-  - export PATH=$PATH:$PWD
+  - wget https://releases.hashicorp.com/consul/1.8.3/consul_1.8.3_linux_amd64.zip
+  - unzip consul_1.8.3_linux_amd64.zip
+  - export PATH=$PWD:$PATH
 
 script:
   - make all
   - make goveralls
 
 before_deploy:
-  - pip install --user release-manager==0.1.0
+  - sudo pip install pyOpenSSL==16.2.0
+  - pip install --user release-manager==0.4.1
 
 deploy:
   skip_cleanup: true

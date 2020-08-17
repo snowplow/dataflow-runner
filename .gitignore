@@ -26,7 +26,3 @@ _testmain.go
 # This project's binaries
 build/
 dist/
-
-# Vagrant
-.vagrant/
-.release.yml.tmp
