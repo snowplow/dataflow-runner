@@ -1,3 +1,8 @@
+Version 0.5.0 (2020-08-20)
+--------------------------
+Add support of default AWS credentials chain (#36)
+Replace vagrant setup with docker (#53)
+
 Version 0.4.2 (2020-02-25)
 --------------------------
 Update to go version 1.13 (#61)
