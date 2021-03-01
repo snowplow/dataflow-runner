@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches:
+    - '*'
+    - '*/*'
+    - '**'
+
+jobs:
+  test:
+    name: Compile & Test
+    strategy:
+      matrix:
+        go-version: [1.13.15]
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Install Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Install Consul
+      run: |
+        mkdir /tmp/consul
+        cd /tmp/consul
+        wget https://releases.hashicorp.com/consul/1.8.3/consul_1.8.3_linux_amd64.zip
+        unzip consul_1.8.3_linux_amd64.zip
+        chmod +x consul
+
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Run tests
+      run: |
+        export PATH="$PATH:/tmp/consul/"
+        make test

@@ -1,8 +1,10 @@
-.PHONY: all format lint test goveralls release release-dry clean
+.PHONY: all cli-linux cli-darwin cli-windows gox format lint test clean
 
 # -----------------------------------------------------------------------------
 #  CONSTANTS
 # -----------------------------------------------------------------------------
+
+version = `cat VERSION`
 
 src_dir       = src
 res_dir       = resources
@@ -32,7 +34,8 @@ generated_schema = $(generated_dir)/schema_generated.go
 generated_data   = $(generated_dir)/data_generated.go
 
 merge_src_dir = $(build_dir)/src
-output_dir    = $(build_dir)/output
+output_dir    = $(build_dir)/bin
+release_dir   = $(build_dir)/release
 
 linux_dir     = $(output_dir)/linux
 darwin_dir    = $(output_dir)/darwin
@@ -44,40 +47,42 @@ bin_darwin    = $(darwin_dir)/$(bin_name)
 bin_windows   = $(windows_dir)/$(bin_name)
 
 # -----------------------------------------------------------------------------
-#  GOLANG FILES
-# -----------------------------------------------------------------------------
-
-go_gen_files  := $(shell find $(generated_dir) -maxdepth 5 -name "*.go")
-go_test_files := $(shell find $(src_dir) -maxdepth 5 -name "*_test.go")
-go_src_files  := $(filter-out $(go_test_files), $(shell find $(src_dir) -maxdepth 5 -name "*.go"))
-
-# -----------------------------------------------------------------------------
 #  BUILDING
 # -----------------------------------------------------------------------------
 
 all: $(merge_log) $(build_log)
 
-$(merge_log): $(go_gen_files) $(go_src_files) $(go_test_files)
+$(merge_log): $(depend_log)
 	mkdir -p $(output_dir)
 	rm -rf $(merge_src_dir)
 	mkdir -p $(merge_src_dir)
 
-	cp $(go_gen_files) $(merge_src_dir)
-	cp $(go_src_files) $(merge_src_dir)
-	cp $(go_test_files) $(merge_src_dir)
+	cp $(shell find $(generated_dir) -maxdepth 5 -name "*.go") $(merge_src_dir)
+	cp $(filter-out $(go_test_files), $(shell find $(src_dir) -maxdepth 5 -name "*.go")) $(merge_src_dir)
+	cp $(shell find $(src_dir) -maxdepth 5 -name "*_test.go") $(merge_src_dir)
 
 	GO111MODULE=on go get -t ./$(merge_src_dir)
 
 	@echo Source merged at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(merge_log);
 
-$(build_log): $(merge_log)
-	GO111MODULE=on go get github.com/mitchellh/gox
+$(build_log): cli-linux cli-darwin cli-windows
+	@echo Build success at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(build_log);
+
+cli-linux: $(merge_log) gox
 	gox -osarch=linux/amd64 -output=$(bin_linux) ./$(merge_src_dir)
+	zip -rj $(output_dir)/dataflow_runner_$(version)_linux_amd64.zip $(bin_linux)
+
+cli-darwin: $(merge_log) gox
 	gox -osarch=darwin/amd64 -output=$(bin_darwin) ./$(merge_src_dir)
+	zip -rj $(output_dir)/dataflow_runner_$(version)_darwin_amd64.zip $(bin_darwin)
+
+cli-windows: $(merge_log) gox
 	GO111MODULE=on go get github.com/konsorten/go-windows-terminal-sequences || true
 	gox -osarch=windows/amd64 -output=$(bin_windows) ./$(merge_src_dir)
+	zip -rj $(output_dir)/dataflow_runner_$(version)_windows_amd64.zip $(bin_windows).exe
 
-	@echo Build success at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(build_log);
+gox:
+	GO111MODULE=on go get -u github.com/mitchellh/gox
 
 # -----------------------------------------------------------------------------
 #  FORMATTING
@@ -105,20 +110,6 @@ test: $(merge_log)
 
 	GO111MODULE=on go tool cover -html=$(coverage_out) -o $(coverage_html)
 
-goveralls: test
-	GO111MODULE=on go get -u github.com/mattn/goveralls/...
-	goveralls -coverprofile=$(coverage_out) -service=travis-ci
-
-# -----------------------------------------------------------------------------
-#  RELEASE
-# -----------------------------------------------------------------------------
-
-release: all
-	release-manager --config .release.yml --check-version --make-artifact --make-version --upload-artifact
-
-release-dry: all
-	release-manager --config .release.yml --check-version --make-artifact
-
 # -----------------------------------------------------------------------------
 #  CLEANUP
 # -----------------------------------------------------------------------------
@@ -129,8 +120,6 @@ clean:
 # -----------------------------------------------------------------------------
 #  DEPENDENCIES
 # -----------------------------------------------------------------------------
-
-depend: $(depend_log)
 
 $(cluster_avsc):
 	mkdir -p $(avro_dir)
@@ -157,5 +146,3 @@ $(depend_log): $(cluster_avsc) $(playbook_avsc)
 	go-bindata -o $(generated_data) $(avro_dir)
 
 	@echo Dependencies generated at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(depend_log);
-
-include $(depend_log)
