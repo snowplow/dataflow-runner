@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2016-2020 Snowplow Analytics Ltd. All rights reserved.
+// Copyright (c) 2016-2021 Snowplow Analytics Ltd. All rights reserved.
 //
 // This program is licensed to you under the Apache License Version 2.0,
 // and you may not use this file except in compliance with the Apache License Version 2.0.
@@ -296,15 +296,16 @@ func GetEbsConfiguration(c *EbsConfigurationRecord) *emr.EbsConfiguration {
 		emrConfigsArr = make([]*emr.EbsBlockDeviceConfig, len(configs))
 
 		for i, config := range configs {
-			emrVolumeSpec := emr.VolumeSpecification{
-				Iops:       aws.Int64(config.VolumeSpecification.Iops),
-				SizeInGB:   aws.Int64(config.VolumeSpecification.SizeInGB),
-				VolumeType: aws.String(config.VolumeSpecification.VolumeType),
+			emrVolumeSpec := &emr.VolumeSpecification{}
+			emrVolumeSpec.SizeInGB = aws.Int64(config.VolumeSpecification.SizeInGB)
+			emrVolumeSpec.VolumeType = aws.String(config.VolumeSpecification.VolumeType)
+			if *emrVolumeSpec.VolumeType != "gp2" {
+				emrVolumeSpec.Iops = aws.Int64(config.VolumeSpecification.Iops)
 			}
 
 			emrConfig := emr.EbsBlockDeviceConfig{
 				VolumesPerInstance:  aws.Int64(config.VolumesPerInstance),
-				VolumeSpecification: &emrVolumeSpec,
+				VolumeSpecification: emrVolumeSpec,
 			}
 
 			emrConfigsArr[i] = &emrConfig
