@@ -1,6 +1,6 @@
 # Dataflow Runner
 
-[![Build Status][travis-image]][travis] [![Release][release-image]][releases] [![License][license-image]][license] [![Coverage][coveralls-image]][coveralls] [![Go Report Card][go-report-image]][go-report]
+[![Release][release-image]][releases] [![License][license-image]][license] [![Coverage][coveralls-image]][coveralls] [![Go Report Card][go-report-image]][go-report]
 
 ## Overview
 
@@ -12,17 +12,11 @@ Run templatable playbooks of Hadoop/Spark/et al jobs on Amazon EMR.
 
 ## Quickstart
 
-Assuming you are running on 64bit Linux:
-
-```bash
-host> wget http://dl.bintray.com/snowplow/snowplow-generic/dataflow_runner_0.5.0_linux_amd64.zip
-host> unzip dataflow_runner_0.5.0_linux_amd64.zip
-host> ./dataflow-runner --help
-```
+Starting from 0.5.1 the binary can be downloaded directly from [Github releases](https://github.com/snowplow/dataflow-runner/releases).
 
 ## Copyright and license
 
-Dataflow Runner is copyright 2016-2020 Snowplow Analytics Ltd.
+Dataflow Runner is copyright 2016-2021 Snowplow Analytics Ltd.
 
 Licensed under the **[Apache License, Version 2.0][license]** (the "License");
 you may not use this software except in compliance with the License.
@@ -33,10 +27,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-[travis]: https://travis-ci.org/snowplow/dataflow-runner
-[travis-image]: https://travis-ci.org/snowplow/dataflow-runner.png?branch=master
-
-[release-image]: http://img.shields.io/badge/release-0.5.0-6ad7e5.svg?style=flat
+[release-image]: http://img.shields.io/badge/release-0.5.1-6ad7e5.svg?style=flat
 [releases]: https://github.com/snowplow/dataflow-runner/releases
 
 [license-image]: http://img.shields.io/badge/license-Apache--2-blue.svg?style=flat

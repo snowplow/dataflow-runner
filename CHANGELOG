@@ -1,3 +1,8 @@
+Version 0.5.1 (2021-02-03)
+--------------------------
+Remove unsupported field when specifying gp2 volume type (#44)
+Migrate to Github Actions (#66)
+
 Version 0.5.0 (2020-08-24)
 --------------------------
 Add support of default AWS credentials chain (#36)
