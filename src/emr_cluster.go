@@ -15,19 +15,22 @@ package main
 
 import (
 	"errors"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"math/rand"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/emr"
 	"github.com/aws/aws-sdk-go/service/emr/emriface"
+	iebackoff "github.com/keikoproj/inverse-exp-backoff"
 	log "github.com/sirupsen/logrus"
 )
 
 const (
-	invalidStateSleepSeconds     = 30
+	invalidStateSleepSeconds = 30
 	bootstrapFailureSleepSeconds = 300
 )
 
@@ -56,7 +59,7 @@ func InitEmrCluster(clusterConfig ClusterConfig) (*EmrCluster, error) {
 }
 
 // TerminateJobFlow attempts to terminate a running cluster
-func (ec EmrCluster) TerminateJobFlow(jobflowID string) error {
+func (ec EmrCluster) TerminateJobFlow(jobflowID string, backoffEnabled bool) error {
 	terminateJobFlowsInput := emr.TerminateJobFlowsInput{
 		JobFlowIds: []*string{aws.String(jobflowID)},
 	}
@@ -69,16 +72,16 @@ func (ec EmrCluster) TerminateJobFlow(jobflowID string) error {
 	log.Info("Terminating EMR cluster with jobflow id '" + jobflowID + "'...")
 
 	_, err = ec.waitForState(jobflowID, "TERMINATED",
-		[]string{"TERMINATED_WITH_ERRORS", "TERMINATED"})
+		[]string{"TERMINATED_WITH_ERRORS", "TERMINATED"}, backoffEnabled)
 	return err
 }
 
 // RunJobFlow builds the params config and launches an EMR cluster
-func (ec EmrCluster) RunJobFlow() (string, error) {
-	return ec.runJobFlow(bootstrapFailureSleepSeconds)
+func (ec EmrCluster) RunJobFlow(backoffEnabled bool) (string, error) {
+	return ec.runJobFlow(bootstrapFailureSleepSeconds, backoffEnabled)
 }
 
-func (ec EmrCluster) runJobFlow(sleepTime int) (string, error) {
+func (ec EmrCluster) runJobFlow(sleepTime int, backoffEnabled bool) (string, error) {
 	params, err := ec.GetJobFlowInput()
 	if err != nil {
 		return "", err
@@ -98,7 +101,7 @@ func (ec EmrCluster) runJobFlow(sleepTime int) (string, error) {
 		log.Info("Launching EMR cluster with name '" + ec.Config.Name + "'...")
 
 		clusterStatus, err := ec.waitForState(*resp.JobFlowId, "WAITING",
-			[]string{"TERMINATED_WITH_ERRORS", "TERMINATED", "TERMINATING", "WAITING"})
+			[]string{"TERMINATED_WITH_ERRORS", "TERMINATED", "TERMINATING", "WAITING"}, backoffEnabled)
 		if err != nil {
 			return "", err
 		}
@@ -130,9 +133,41 @@ func (ec EmrCluster) runJobFlow(sleepTime int) (string, error) {
 	return "", errors.New("EMR cluster failed to launch with state " + clusterState)
 }
 
+func (ec EmrCluster) waitWithBackoff(describeClusterInput *emr.DescribeClusterInput, describeClusterOutput *emr.DescribeClusterOutput, neededState string, exitStates []string) (*emr.DescribeClusterOutput, bool, error) {
+	isThrottled := false
+	backoff, err := iebackoff.NewIEBackoff(4*time.Minute, 30*time.Second, 0.5, 50)
+	if err != nil {
+		return nil, isThrottled, err
+	}
+
+	for ; !StringInSlice(*describeClusterOutput.Cluster.Status.State, exitStates) && (err == nil); err = backoff.Next() {
+		log.Info("EMR cluster is in state " + *describeClusterOutput.Cluster.Status.State + " - need state " + neededState + ", checking again...")
+
+		describeClusterOutput, err = ec.Svc.DescribeCluster(describeClusterInput)
+		if err != nil {
+			if awsErr, ok := err.(awserr.Error); ok {
+				log.Errorln("AWS Error:", awsErr.Error())
+				if awsErr.Code() == "ThrottlingException" || strings.Contains(awsErr.Message(), "Rate exceeded") {
+					isThrottled = true
+					break
+				} else {
+					return nil, isThrottled, err
+				}
+			} else {
+				return nil, isThrottled, err
+			}
+		}
+	}
+	if !isThrottled && err != nil {
+		return nil, isThrottled, errors.New("Backoff strategy is exhausted")
+	}
+
+	return describeClusterOutput, isThrottled, nil
+}
+
 // waitForState blocks waiting for the EMR cluster to enter a certain state or
-// a failure exit state
-func (ec EmrCluster) waitForState(jobflowID string, neededState string, exitStates []string) (*emr.ClusterStatus, error) {
+// a failure exit state using the provided backoff strategy
+func (ec EmrCluster) waitForState(jobflowID string, neededState string, exitStates []string, backoffEnabled bool) (*emr.ClusterStatus, error) {
 	cluster := &emr.DescribeClusterInput{ClusterId: aws.String(jobflowID)}
 
 	resp, err := ec.Svc.DescribeCluster(cluster)
@@ -140,14 +175,48 @@ func (ec EmrCluster) waitForState(jobflowID string, neededState string, exitStat
 		return nil, err
 	}
 
-	for !StringInSlice(*resp.Cluster.Status.State, exitStates) {
-		log.Info("EMR cluster is in state " + *resp.Cluster.Status.State + " - need state " + neededState + ", checking again in " + strconv.Itoa(invalidStateSleepSeconds) + " seconds...")
-
-		time.Sleep(time.Second * invalidStateSleepSeconds)
-
-		resp, err = ec.Svc.DescribeCluster(cluster)
+	if backoffEnabled {
+		isThrottled := false
+		resp, isThrottled, err = ec.waitWithBackoff(cluster, resp, neededState, exitStates)
 		if err != nil {
 			return nil, err
+		}
+
+		if isThrottled {
+			retry := 2
+			for !StringInSlice(*resp.Cluster.Status.State, exitStates) && retry > 0 {
+				log.Info("EMR cluster is in state " + *resp.Cluster.Status.State + " - need state " + neededState + ", checking again in " + strconv.Itoa(60) + " seconds...")
+
+				time.Sleep(time.Second * time.Duration(60))
+
+				resp, err = ec.Svc.DescribeCluster(cluster)
+				if err != nil {
+					if awsErr, ok := err.(awserr.Error); ok {
+						log.Errorln("AWS Error:", awsErr.Error())
+						if awsErr.Code() == "ThrottlingException" || strings.Contains(awsErr.Message(), "Rate exceeded") {
+							retry--
+						} else {
+							return nil, err
+						}
+					} else {
+						return nil, err
+					}
+				}
+			}
+			if !StringInSlice(*resp.Cluster.Status.State, exitStates) && retry == 0 {
+				return nil, errors.New("ThrottlingException was hit 3 times")
+			}
+		}
+	} else {
+		for !StringInSlice(*resp.Cluster.Status.State, exitStates) {
+			log.Info("EMR cluster is in state " + *resp.Cluster.Status.State + " - need state " + neededState + ", checking again in " + strconv.Itoa(invalidStateSleepSeconds) + " seconds...")
+
+			time.Sleep(time.Second * invalidStateSleepSeconds)
+
+			resp, err = ec.Svc.DescribeCluster(cluster)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 

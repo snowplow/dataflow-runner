@@ -123,12 +123,12 @@ func TestTerminateJobFlow_Fail(t *testing.T) {
 	ec := mockEmrCluster(*record)
 
 	// fails if TerminateJobFlows fails
-	err := ec.TerminateJobFlow("hello")
+	err := ec.TerminateJobFlow("hello", false)
 	assert.NotNil(err)
 	assert.Equal("TerminateJobFlows failed", err.Error())
 
 	// fails if DescribeCluster fails
-	err = ec.TerminateJobFlow("j-123")
+	err = ec.TerminateJobFlow("j-123", false)
 	assert.NotNil(err)
 	assert.Equal("DescribeCluster failed", err.Error())
 }
@@ -136,7 +136,7 @@ func TestTerminateJobFlow_Fail(t *testing.T) {
 func TestTerminateJobFlow_Success(t *testing.T) {
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 	ec := mockEmrCluster(*record)
-	err := ec.TerminateJobFlow("j-TERMINATED")
+	err := ec.TerminateJobFlow("j-TERMINATED", false)
 	assert.Nil(t, err)
 }
 
@@ -146,7 +146,7 @@ func TestRunJobFlow_Fail(t *testing.T) {
 
 	// fails if GetJobFlowInput fails
 	ec := mockEmrCluster(*record)
-	_, err := ec.runJobFlow(3)
+	_, err := ec.runJobFlow(3, false)
 	assert.NotNil(err)
 	assert.Equal("Only one of Availability Zone and Subnet id should be provided", err.Error())
 
@@ -154,28 +154,28 @@ func TestRunJobFlow_Fail(t *testing.T) {
 	record.Name = "fail"
 	record.Ec2.Location.Vpc = nil
 	ec = mockEmrCluster(*record)
-	_, err = ec.runJobFlow(3)
+	_, err = ec.runJobFlow(3, false)
 	assert.NotNil(err)
 	assert.Equal("RunJobFlow failed", err.Error())
 
 	// fails if DescribeCluster fails
 	record.Name = "123"
 	ec = mockEmrCluster(*record)
-	_, err = ec.runJobFlow(3)
+	_, err = ec.runJobFlow(3, false)
 	assert.NotNil(err)
 	assert.Equal("DescribeCluster failed", err.Error())
 
 	// fails if 3 or more retries
 	record.Name = "TERMINATED"
 	ec = mockEmrCluster(*record)
-	_, err = ec.runJobFlow(3)
+	_, err = ec.runJobFlow(3, false)
 	assert.NotNil(err)
 	assert.Equal("could not start the cluster due to bootstrap failure", err.Error())
 
 	// fails if the cluster state is not WAITING
 	record.Name = "TERMINATING"
 	ec = mockEmrCluster(*record)
-	_, err = ec.runJobFlow(3)
+	_, err = ec.runJobFlow(3, false)
 	assert.NotNil(err)
 	assert.Equal("EMR cluster failed to launch with state TERMINATING", err.Error())
 }
@@ -184,7 +184,7 @@ func TestRunJobFlow_Success(t *testing.T) {
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord2), nil, "")
 	record.Name = "WAITING"
 	ec := mockEmrCluster(*record)
-	id, _ := ec.runJobFlow(3)
+	id, _ := ec.runJobFlow(3, false)
 	assert.Equal(t, "j-WAITING", id)
 }
 

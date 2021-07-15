@@ -40,6 +40,7 @@ const (
 	fVars            = "vars"
 	fAsync           = "async"
 	fLogFailedSteps  = "log-failed-steps"
+	fBackoff         = "backoff"
 	fLogLevel        = "log-level"
 	fLock            = "lock"
 	fSoftLock        = "softLock"
@@ -99,11 +100,13 @@ func main() {
 			Flags: []cli.Flag{
 				getEmrConfigFlag(),
 				getVarsFlag(),
+				getBackoffFlag(),
 			},
 			Action: func(c *cli.Context) error {
 				jobflowID, err := up(
 					c.String(fEmrConfig),
 					c.String(fVars),
+					c.Bool(fBackoff),
 				)
 				if err != nil {
 					return exitCodeError(err)
@@ -179,12 +182,14 @@ func main() {
 				getEmrConfigFlag(),
 				getEmrClusterFlag(),
 				getVarsFlag(),
+				getBackoffFlag(),
 			},
 			Action: func(c *cli.Context) error {
 				err := down(
 					c.String(fEmrConfig),
 					c.String(fEmrCluster),
 					c.String(fVars),
+					c.Bool(fBackoff),
 				)
 				if err != nil {
 					return exitCodeError(err)
@@ -201,6 +206,7 @@ func main() {
 				getEmrConfigFlag(),
 				getEmrPlaybookFlag(),
 				getLogFailedStepsFlag(),
+				getBackoffFlag(),
 				getLockFlag(),
 				getSoftLockFlag(),
 				getConsulFlag(),
@@ -210,6 +216,7 @@ func main() {
 				emrConfig := c.String(fEmrConfig)
 				emrPlaybook := c.String(fEmrPlaybook)
 				logFailedSteps := c.Bool(fLogFailedSteps)
+				backoffEnabled := c.Bool(fBackoff)
 				hardLock := c.String(fLock)
 				softLock := c.String(fSoftLock)
 				consul := c.String(fConsul)
@@ -235,7 +242,7 @@ func main() {
 					return exitCodeError(err)
 				}
 
-				jobflowID, err1 := upWithConfig(clusterRecord)
+				jobflowID, err1 := upWithConfig(clusterRecord, backoffEnabled)
 				if err1 != nil {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
@@ -245,7 +252,7 @@ func main() {
 				log.Info("EMR cluster launched successfully; Jobflow ID: " + jobflowID)
 				failedStepsIDs, err2 := runWithConfig(playbookRecord, jobflowID, false)
 
-				err3 := downWithConfig(clusterRecord, jobflowID)
+				err3 := downWithConfig(clusterRecord, jobflowID, backoffEnabled)
 				if err3 != nil {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
@@ -309,6 +316,13 @@ func getLogFailedStepsFlag() cli.BoolFlag {
 	}
 }
 
+func getBackoffFlag() cli.BoolFlag {
+	return cli.BoolFlag{
+		Name:  fBackoff,
+		Usage: "Whether or not to use backoff strategy to interact with EMR",
+	}
+}
+
 func getLockFlag() cli.StringFlag {
 	usage := "Path to the lock held for the duration of the jobflow steps. This is materialized" +
 		" by a file or a KV entry in Consul depending on the --" + fConsul + " flag."
@@ -338,21 +352,21 @@ func getConsulFlag() cli.StringFlag {
 // --- Commands
 
 // up launches a new EMR cluster
-func up(emrConfig string, vars string) (string, error) {
+func up(emrConfig string, vars string, backoffEnabled bool) (string, error) {
 	clusterRecord, err := parseClusterRecord(emrConfig, vars)
 	if err != nil {
 		return "", err
 	}
 
-	return upWithConfig(clusterRecord)
+	return upWithConfig(clusterRecord, backoffEnabled)
 }
 
-func upWithConfig(clusterRecord *ClusterConfig) (string, error) {
+func upWithConfig(clusterRecord *ClusterConfig, backoffEnabled bool) (string, error) {
 	ec, err := InitEmrCluster(*clusterRecord)
 	if err != nil {
 		return "", err
 	}
-	jobflowID, err := ec.RunJobFlow()
+	jobflowID, err := ec.RunJobFlow(backoffEnabled)
 	if err != nil {
 		return "", err
 	}
@@ -407,7 +421,7 @@ func runWithConfig(playbookRecord *PlaybookConfig, emrCluster string, async bool
 }
 
 // down terminates a running EMR cluster
-func down(emrConfig string, emrCluster string, vars string) error {
+func down(emrConfig string, emrCluster string, vars string, backoffEnabled bool) error {
 	if emrConfig == "" {
 		return flagToError(fEmrConfig)
 	}
@@ -430,15 +444,15 @@ func down(emrConfig string, emrCluster string, vars string) error {
 		return err
 	}
 
-	return downWithConfig(clusterRecord, emrCluster)
+	return downWithConfig(clusterRecord, emrCluster, backoffEnabled)
 }
 
-func downWithConfig(clusterRecord *ClusterConfig, emrCluster string) error {
+func downWithConfig(clusterRecord *ClusterConfig, emrCluster string, backoffEnabled bool) error {
 	ec, err := InitEmrCluster(*clusterRecord)
 	if err != nil {
 		return err
 	}
-	return ec.TerminateJobFlow(emrCluster)
+	return ec.TerminateJobFlow(emrCluster, backoffEnabled)
 }
 
 // --- Helpers
