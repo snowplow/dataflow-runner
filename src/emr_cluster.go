@@ -23,11 +23,11 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/emr"
 	"github.com/aws/aws-sdk-go/service/emr/emriface"
+	"github.com/jpillora/backoff"
 	log "github.com/sirupsen/logrus"
 )
 
 const (
-	invalidStateSleepSeconds     = 30
 	bootstrapFailureSleepSeconds = 300
 )
 
@@ -68,8 +68,15 @@ func (ec EmrCluster) TerminateJobFlow(jobflowID string) error {
 
 	log.Info("Terminating EMR cluster with jobflow id '" + jobflowID + "'...")
 
+	backoff := &backoff.Backoff{
+		Min:    1 * time.Minute,
+		Max:    10 * time.Minute,
+		Factor: 2,
+		Jitter: true,
+	}
+
 	_, err = ec.waitForState(jobflowID, "TERMINATED",
-		[]string{"TERMINATED_WITH_ERRORS", "TERMINATED"})
+		[]string{"TERMINATED_WITH_ERRORS", "TERMINATED"}, backoff)
 	return err
 }
 
@@ -97,8 +104,15 @@ func (ec EmrCluster) runJobFlow(sleepTime int) (string, error) {
 
 		log.Info("Launching EMR cluster with name '" + ec.Config.Name + "'...")
 
+		backoff := &backoff.Backoff{
+			Min:    1 * time.Minute,
+			Max:    10 * time.Minute,
+			Factor: 2,
+			Jitter: true,
+		}
+
 		clusterStatus, err := ec.waitForState(*resp.JobFlowId, "WAITING",
-			[]string{"TERMINATED_WITH_ERRORS", "TERMINATED", "TERMINATING", "WAITING"})
+			[]string{"TERMINATED_WITH_ERRORS", "TERMINATED", "TERMINATING", "WAITING"}, backoff)
 		if err != nil {
 			return "", err
 		}
@@ -131,8 +145,8 @@ func (ec EmrCluster) runJobFlow(sleepTime int) (string, error) {
 }
 
 // waitForState blocks waiting for the EMR cluster to enter a certain state or
-// a failure exit state
-func (ec EmrCluster) waitForState(jobflowID string, neededState string, exitStates []string) (*emr.ClusterStatus, error) {
+// a failure exit state using the provided backoff strategy
+func (ec EmrCluster) waitForState(jobflowID string, neededState string, exitStates []string, backoff *backoff.Backoff) (*emr.ClusterStatus, error) {
 	cluster := &emr.DescribeClusterInput{ClusterId: aws.String(jobflowID)}
 
 	resp, err := ec.Svc.DescribeCluster(cluster)
@@ -141,9 +155,11 @@ func (ec EmrCluster) waitForState(jobflowID string, neededState string, exitStat
 	}
 
 	for !StringInSlice(*resp.Cluster.Status.State, exitStates) {
-		log.Info("EMR cluster is in state " + *resp.Cluster.Status.State + " - need state " + neededState + ", checking again in " + strconv.Itoa(invalidStateSleepSeconds) + " seconds...")
+		jitter := int(backoff.Duration().Seconds())
 
-		time.Sleep(time.Second * invalidStateSleepSeconds)
+		log.Info("EMR cluster is in state " + *resp.Cluster.Status.State + " - need state " + neededState + ", checking again in " + strconv.Itoa(jitter) + " seconds...")
+
+		time.Sleep(time.Second * time.Duration(jitter))
 
 		resp, err = ec.Svc.DescribeCluster(cluster)
 		if err != nil {
