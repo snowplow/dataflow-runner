@@ -1,3 +1,7 @@
+Version 0.6.0 (2021-08-17)
+--------------------------
+Rely on exponential backoff when requesting the cluster's status (#37)
+
 Version 0.5.1 (2021-03-08)
 --------------------------
 Remove unsupported field when specifying gp2 volume type (#44)
