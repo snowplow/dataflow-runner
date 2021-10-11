@@ -15,11 +15,12 @@ package main
 
 import (
 	"errors"
-	"github.com/aws/aws-sdk-go/aws/awserr"
 	"math/rand"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go/aws/awserr"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -30,7 +31,7 @@ import (
 )
 
 const (
-	invalidStateSleepSeconds = 30
+	invalidStateSleepSeconds     = 30
 	bootstrapFailureSleepSeconds = 300
 )
 
@@ -135,7 +136,7 @@ func (ec EmrCluster) runJobFlow(sleepTime int, backoffEnabled bool) (string, err
 
 func (ec EmrCluster) waitWithBackoff(describeClusterInput *emr.DescribeClusterInput, describeClusterOutput *emr.DescribeClusterOutput, neededState string, exitStates []string) (*emr.DescribeClusterOutput, bool, error) {
 	isThrottled := false
-	backoff, err := iebackoff.NewIEBackoff(4*time.Minute, 30*time.Second, 0.5, 50)
+	backoff, err := iebackoff.NewIEBackoff(8*time.Minute, 30*time.Second, 0.25, 50)
 	if err != nil {
 		return nil, isThrottled, err
 	}
