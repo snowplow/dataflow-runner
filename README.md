@@ -6,9 +6,7 @@
 
 Run templatable playbooks of Hadoop/Spark/et al jobs on Amazon EMR.
 
-|  **[Devops Guide][devops-guide]**     | **[Analysts Guide][analysts-guide]**     | **[Developers Guide][developers-guide]**     |
-|:--------------------------------------:|:-----------------------------------------:|:---------------------------------------------:|
-|  [![i1][devops-image]][devops-guide] | [![i2][analysts-image]][analysts-guide] | [![i3][developers-image]][developers-guide] |
+Check Snowplow Analytics [documentation](https://docs.snowplowanalytics.com/docs/pipeline-components-and-applications/dataflow-runner/) for details.
 
 ## Quickstart
 
