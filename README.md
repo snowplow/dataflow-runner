@@ -36,11 +36,3 @@ limitations under the License.
 
 [go-report-image]: https://goreportcard.com/badge/github.com/snowplow/dataflow-runner
 [go-report]: https://goreportcard.com/report/github.com/snowplow/dataflow-runner
-
-[analysts-guide]: https://github.com/snowplow/dataflow-runner/wiki/Guide-for-analysts
-[developers-guide]: https://github.com/snowplow/dataflow-runner/wiki/Guide-for-developers
-[devops-guide]: https://github.com/snowplow/dataflow-runner/wiki/Guide-for-devops
-
-[devops-image]:  http://sauna-github-static.s3-website-us-east-1.amazonaws.com/devops.svg
-[analysts-image]: http://sauna-github-static.s3-website-us-east-1.amazonaws.com/analyst.svg
-[developers-image]:  http://sauna-github-static.s3-website-us-east-1.amazonaws.com/developer.svg
