@@ -187,10 +187,9 @@ func TestGetJobFlowStepsInput_Fail(t *testing.T) {
 }
 func TestRetrieveStepsStates(t *testing.T) {
 	assert := assert.New(t)
-	ajfso := &emr.AddJobFlowStepsOutput{StepIds: []*string{aws.String("step-id")}}
 
 	jfs := mockJobFlowStepsWithoutPlaybook("j-COMPLETED")
-	successCount, failureCount, failedStepsIds, infoLogs, errorLogs, err := jfs.RetrieveStepsStates(ajfso)
+	successCount, failureCount, failedStepsIds, infoLogs, errorLogs, err := jfs.RetrieveStepsStates([]*string{aws.String("step-id")})
 	assert.Equal(1, successCount)
 	assert.Equal(0, failureCount)
 	assert.NotNil(failedStepsIds)
@@ -202,7 +201,7 @@ func TestRetrieveStepsStates(t *testing.T) {
 	assert.Nil(err)
 
 	jfs = mockJobFlowStepsWithoutPlaybook("j-CANCELLED")
-	successCount, failureCount, failedStepsIds, infoLogs, errorLogs, err = jfs.RetrieveStepsStates(ajfso)
+	successCount, failureCount, failedStepsIds, infoLogs, errorLogs, err = jfs.RetrieveStepsStates([]*string{aws.String("step-id")})
 	assert.Equal(0, successCount)
 	assert.Equal(1, failureCount)
 	assert.NotNil(failedStepsIds)
@@ -216,11 +215,10 @@ func TestRetrieveStepsStates(t *testing.T) {
 
 func TestRetrieveStepsStates_Fail(t *testing.T) {
 	assert := assert.New(t)
-	ajfso := &emr.AddJobFlowStepsOutput{StepIds: []*string{aws.String("step-id")}}
 
 	// fails if one DescribeStep fails
 	jfs := mockJobFlowStepsWithoutPlaybook("j-NOTHING")
-	successCount, failureCount, failedStepsIds, infoLogs, errorLogs, err := jfs.RetrieveStepsStates(ajfso)
+	successCount, failureCount, failedStepsIds, infoLogs, errorLogs, err := jfs.RetrieveStepsStates([]*string{aws.String("step-id")})
 	assert.Equal(0, successCount)
 	assert.Equal(0, failureCount)
 	assert.Nil(failedStepsIds)

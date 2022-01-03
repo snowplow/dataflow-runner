@@ -198,7 +198,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.Instances.Task.Count = 1
 
 	ec, _ := InitEmrCluster(*record)
-	res, _ := ec.GetJobFlowInput()
+	res, _ := ec.GetJobFlowInput(true)
 
 	assert.Equal(3, len(res.Instances.InstanceGroups))
 
@@ -207,7 +207,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.Instances.Task.Count = 1
 
 	ec, _ = InitEmrCluster(*record)
-	res, _ = ec.GetJobFlowInput()
+	res, _ = ec.GetJobFlowInput(true)
 
 	assert.Equal(2, len(res.Instances.InstanceGroups))
 
@@ -216,7 +216,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.Instances.Task.Count = 0
 
 	ec, _ = InitEmrCluster(*record)
-	res, _ = ec.GetJobFlowInput()
+	res, _ = ec.GetJobFlowInput(true)
 
 	assert.Equal(2, len(res.Instances.InstanceGroups))
 
@@ -225,7 +225,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.Instances.Task.Count = 0
 
 	ec, _ = InitEmrCluster(*record)
-	res, _ = ec.GetJobFlowInput()
+	res, _ = ec.GetJobFlowInput(true)
 
 	assert.Equal(1, len(res.Instances.InstanceGroups))
 
@@ -235,7 +235,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.Location.Classic = &ClassicRecord{AvailabilityZone: "us-east-1a"}
 
 	ec, _ = InitEmrCluster(*record)
-	res, _ = ec.GetJobFlowInput()
+	res, _ = ec.GetJobFlowInput(true)
 
 	assert.Equal("us-east-1a", *res.Instances.Placement.AvailabilityZone)
 	assert.Equal("", *res.Instances.Ec2SubnetId)
@@ -245,7 +245,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.AmiVersion = "3.0.0"
 
 	ec, _ = InitEmrCluster(*record)
-	res, _ = ec.GetJobFlowInput()
+	res, _ = ec.GetJobFlowInput(true)
 
 	assert.Equal("3.0.0", *res.AmiVersion)
 
@@ -254,7 +254,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.AmiVersion = "4.5.0"
 
 	ec, _ = InitEmrCluster(*record)
-	res, _ = ec.GetJobFlowInput()
+	res, _ = ec.GetJobFlowInput(true)
 
 	assert.Equal("emr-4.5.0", *res.ReleaseLabel)
 
@@ -263,7 +263,7 @@ func TestGetJobFlowInput_Success(t *testing.T) {
 	record.Ec2.AmiVersion = "hello"
 
 	ec, _ = InitEmrCluster(*record)
-	_, err := ec.GetJobFlowInput()
+	_, err := ec.GetJobFlowInput(true)
 
 	assert.Equal("strconv.Atoi: parsing \"h\": invalid syntax", err.Error())
 }
@@ -275,7 +275,7 @@ func TestGetJobFlowInput_Fail(t *testing.T) {
 
 	// fails if GetLocation fails
 	ec, _ := InitEmrCluster(*record)
-	res, err := ec.GetJobFlowInput()
+	res, err := ec.GetJobFlowInput(true)
 	assert.Nil(res)
 	assert.NotNil(err)
 	assert.Equal("Only one of Availability Zone and Subnet id should be provided", err.Error())
@@ -283,7 +283,7 @@ func TestGetJobFlowInput_Fail(t *testing.T) {
 	record.Ec2.Location.Vpc = nil
 	record.Ec2.Location.Classic = nil
 	ec, _ = InitEmrCluster(*record)
-	res, err = ec.GetJobFlowInput()
+	res, err = ec.GetJobFlowInput(true)
 	assert.Nil(res)
 	assert.NotNil(err)
 	assert.Equal("At least one of Availability Zone and Subnet id is required", err.Error())

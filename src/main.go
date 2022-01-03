@@ -24,6 +24,8 @@ import (
 
 	"fmt"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/emr"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
 )
@@ -235,35 +237,49 @@ func main() {
 					return exitCodeError(err)
 				}
 
-				jobflowID, err1 := upWithConfig(clusterRecord)
-				if err1 != nil {
+				emrCluster, err := InitEmrCluster(*clusterRecord)
+				if err != nil {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
 					}
-					return exitCodeError(err1)
+					return exitCodeError(err)
 				}
-				log.Info("EMR cluster launched successfully; Jobflow ID: " + jobflowID)
-				failedStepsIDs, err2 := runWithConfig(playbookRecord, jobflowID, false)
 
-				err3 := downWithConfig(clusterRecord, jobflowID)
-				if err3 != nil {
+				jobFlowSteps, err := runJobFlowWithSteps(emrCluster, playbookRecord)
+				if err != nil {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
 					}
-					return exitCodeError(err3)
-				}
-				log.Info("EMR cluster terminated successfully")
-
-				if logFailedSteps && len(failedStepsIDs) > 0 {
-					displayFailedStepsLogs(failedStepsIDs, emrPlaybook, jobflowID, vars)
+					return exitCodeError(err)
 				}
 
-				if err2 != nil {
+				log.Info("Transient EMR run with jobflow ID [" + jobFlowSteps.JobflowID + "] started successfully")
+
+				log.Info("Waiting until cluster is terminated...")
+				err = emrCluster.Svc.WaitUntilClusterTerminated(
+					&emr.DescribeClusterInput{
+						ClusterId: aws.String(jobFlowSteps.JobflowID),
+					},
+				)
+				if err != nil {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
 					}
-					log.Error("Transient EMR run completed with errors")
-					return exitCodeError(err2)
+					return exitCodeError(err)
+				}
+
+				log.Info("EMR cluster with ID [" + jobFlowSteps.JobflowID + "] is terminated successfully")
+
+				failedStepIDs, err := jobFlowSteps.GetFailedStepIDs()
+				if err != nil {
+					if lock != nil && softLock != "" {
+						lock.Unlock()
+					}
+					return exitCodeError(err)
+				}
+
+				if logFailedSteps && len(failedStepIDs) > 0 {
+					displayFailedStepsLogs(failedStepIDs, emrPlaybook, jobFlowSteps.JobflowID, vars)
 				}
 
 				log.Info("Transient EMR run completed successfully")
@@ -358,6 +374,35 @@ func upWithConfig(clusterRecord *ClusterConfig) (string, error) {
 	}
 
 	return jobflowID, nil
+}
+
+func runJobFlowWithSteps(emrCluster *EmrCluster, playbookRecord *PlaybookConfig) (*JobFlowSteps, error) {
+
+	jobFlowInput, err := emrCluster.GetJobFlowInput(false)
+	if err != nil {
+		return nil, err
+	}
+
+	jobFlowSteps, err := InitJobFlowSteps(*playbookRecord, "", false)
+	if err != nil {
+		return nil, err
+	}
+
+	addJobFlowStepsInput, err := jobFlowSteps.GetJobFlowStepsInput()
+	if err != nil {
+		return nil, err
+	}
+
+	jobFlowInput.Steps = addJobFlowStepsInput.Steps
+
+	jobFlowOutput, err := emrCluster.Svc.RunJobFlow(jobFlowInput)
+	if err != nil {
+		return nil, err
+	}
+
+	jobFlowSteps.JobflowID = *jobFlowOutput.JobFlowId
+
+	return jobFlowSteps, nil
 }
 
 // log the failed steps by printing out the different log files for each failed step

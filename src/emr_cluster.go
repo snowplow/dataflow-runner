@@ -79,7 +79,7 @@ func (ec EmrCluster) RunJobFlow() (string, error) {
 }
 
 func (ec EmrCluster) runJobFlow(sleepTime int) (string, error) {
-	params, err := ec.GetJobFlowInput()
+	params, err := ec.GetJobFlowInput(true)
 	if err != nil {
 		return "", err
 	}
@@ -158,7 +158,7 @@ func (ec EmrCluster) waitForState(jobflowID string, neededState string, exitStat
 
 // GetJobFlowInput parses the ClusterRecord and returns a
 // RunJobFlowInput object which can launch an EMR cluster
-func (ec EmrCluster) GetJobFlowInput() (*emr.RunJobFlowInput, error) {
+func (ec EmrCluster) GetJobFlowInput(keepJobFlowAliveWhenNoSteps bool) (*emr.RunJobFlowInput, error) {
 	ec2 := ec.Config.Ec2
 
 	ec2Subnet, placement, err := ec.GetLocation()
@@ -174,7 +174,7 @@ func (ec EmrCluster) GetJobFlowInput() (*emr.RunJobFlowInput, error) {
 		Placement: &emr.PlacementType{
 			AvailabilityZone: aws.String(placement),
 		},
-		KeepJobFlowAliveWhenNoSteps: aws.Bool(true),
+		KeepJobFlowAliveWhenNoSteps: aws.Bool(keepJobFlowAliveWhenNoSteps),
 	}
 
 	applications, err := ec.GetApplications()

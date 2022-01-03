@@ -56,6 +56,52 @@ func InitJobFlowSteps(playbookConfig PlaybookConfig, jobflowID string, isAsync b
 	}, nil
 }
 
+func (jfs JobFlowSteps) GetFailedStepIDs() ([]string, error) {
+
+	stepIDs, err := jfs.GetStepIDs()
+	if err != nil {
+		return nil, err
+	}
+
+	done := false
+	errorCount := 0
+	failedStepsIDs := []string{}
+	historicalInfoLogs := []string{}
+	historicalErrorLogs := []string{}
+
+	for done == false && jfs.IsBlocking == true {
+		successCount, errCount, fStepsIDs, infoLogs, errorLogs, err :=
+			jfs.RetrieveStepsStates(stepIDs)
+		if err != nil {
+			return nil, err
+		}
+		errorCount = errCount
+
+		for _, l := range Diff(historicalInfoLogs, infoLogs) {
+			log.Info(l)
+		}
+		for _, l := range Diff(historicalErrorLogs, errorLogs) {
+			log.Error(l)
+		}
+		historicalInfoLogs = infoLogs
+		historicalErrorLogs = errorLogs
+
+		if (successCount + errorCount) == len(stepIDs) {
+			done = true
+			failedStepsIDs = fStepsIDs
+		} else {
+			time.Sleep(time.Second * 15)
+			failedStepsIDs = []string{}
+		}
+	}
+
+	if errorCount == 0 {
+		return nil, nil
+	}
+	return failedStepsIDs, errors.New("" + strconv.Itoa(errorCount) + "/" +
+		strconv.Itoa(len(stepIDs)) + " steps failed to complete successfully")
+}
+
 // AddJobFlowSteps builds the parameters and then submits them to the running EMR cluster, returns
 // the ids of the failed steps
 func (jfs JobFlowSteps) AddJobFlowSteps() ([]string, error) {
@@ -80,7 +126,7 @@ func (jfs JobFlowSteps) AddJobFlowSteps() ([]string, error) {
 
 	for done == false && jfs.IsBlocking == true {
 		successCount, errCount, fStepsIDs, infoLogs, errorLogs, err :=
-			jfs.RetrieveStepsStates(addJobFlowStepsOutput)
+			jfs.RetrieveStepsStates(addJobFlowStepsOutput.StepIds)
 		if err != nil {
 			return nil, err
 		}
@@ -111,15 +157,35 @@ func (jfs JobFlowSteps) AddJobFlowSteps() ([]string, error) {
 		strconv.Itoa(len(addJobFlowStepsOutput.StepIds)) + " steps failed to complete successfully")
 }
 
+func (jfs JobFlowSteps) GetStepIDs() ([]*string, error) {
+
+	stepIDs := []*string{}
+
+	listStepsInput := &emr.ListStepsInput{
+		ClusterId: aws.String(jfs.JobflowID),
+	}
+
+	listStepsOutput, err := jfs.EmrSvc.ListSteps(listStepsInput)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, step := range listStepsOutput.Steps {
+		stepIDs = append(stepIDs, step.Id)
+	}
+
+	return stepIDs, nil
+}
+
 // RetrieveStepsStates retrieves the states of all the steps for a job flow returning the state
 // of every step as well as information about success or failure for each one
-func (jfs JobFlowSteps) RetrieveStepsStates(addJobFlowStepsOutput *emr.AddJobFlowStepsOutput) (int, int, []string, []string, []string, error) {
+func (jfs JobFlowSteps) RetrieveStepsStates(stepIDs []*string) (int, int, []string, []string, []string, error) {
 	infoLogs := make([]string, 0)
 	errorLogs := make([]string, 0)
 	failedStepsIDs := make([]string, 0)
 	successCount := 0
 	errorCount := 0
-	for _, stepID := range addJobFlowStepsOutput.StepIds {
+	for _, stepID := range stepIDs {
 		state, logs, err := jfs.RetrieveStepState(*stepID)
 		if err != nil {
 			return 0, 0, nil, nil, nil, err
