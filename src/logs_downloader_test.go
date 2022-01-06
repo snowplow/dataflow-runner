@@ -125,7 +125,7 @@ func TestGetStepLogs_Fail(t *testing.T) {
 	contents, err := ld.GetStepLogs(stepID)
 	assert.Nil(contents)
 	assert.NotNil(err)
-	assert.Equal("Couldn't parse LogUri: parse ://: missing protocol scheme", err.Error())
+	assert.Equal("Couldn't parse LogUri: parse \"://\": missing protocol scheme", err.Error())
 
 	// fails if ListObjectsPages fails
 	ld = mockLogsDownloader("test-get-step-logs-fail")
@@ -204,5 +204,5 @@ func TestGetBucketAndPrefix_Fail(t *testing.T) {
 	ld = mockLogsDownloader("test-get-bucket-fail")
 	_, _, err = ld.GetBucketAndPrefix()
 	assert.NotNil(err)
-	assert.Equal("Couldn't parse LogUri: parse ://: missing protocol scheme", err.Error())
+	assert.Equal("Couldn't parse LogUri: parse \"://\": missing protocol scheme", err.Error())
 }
