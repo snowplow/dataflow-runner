@@ -1,3 +1,9 @@
+Version 0.6.0 (2022-01-19)
+--------------------------
+Update license for 2022 (#75)
+Make steps immediately submitted to transient cluster (#38)
+Bump golang to 1.17 (#74)
+
 Version 0.5.1 (2021-03-08)
 --------------------------
 Remove unsupported field when specifying gp2 volume type (#44)
