@@ -1,3 +1,7 @@
+Version 0.6.1 (2022-01-26)
+--------------------------
+Improve transient cluster termination policy (#76)
+
 Version 0.6.0 (2022-01-19)
 --------------------------
 Update license for 2022 (#75)
