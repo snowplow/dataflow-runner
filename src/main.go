@@ -25,6 +25,7 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/emr"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
@@ -256,9 +257,14 @@ func main() {
 				log.Info("Transient EMR run with jobflow ID [" + jobFlowSteps.JobflowID + "] started successfully")
 
 				log.Info("Waiting until cluster is terminated...")
-				err = emrCluster.Svc.WaitUntilClusterTerminated(
+				err = emrCluster.Svc.WaitUntilClusterTerminatedWithContext(
+					aws.BackgroundContext(),
 					&emr.DescribeClusterInput{
 						ClusterId: aws.String(jobFlowSteps.JobflowID),
+					},
+					request.WithWaiterDelay(request.ConstantWaiterDelay(45*time.Second)),
+					func(w *request.Waiter) {
+						w.MaxAttempts = 26880
 					},
 				)
 				if err != nil {
