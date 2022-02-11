@@ -1,4 +1,4 @@
-.PHONY: all cli-linux cli-darwin cli-windows gox format lint test clean
+.PHONY: all cli-linux cli-darwin cli-windows format lint test clean
 
 # -----------------------------------------------------------------------------
 #  CONSTANTS
@@ -14,14 +14,11 @@ depend_log    = $(build_dir)/.depend
 build_log     = $(build_dir)/.build
 merge_log     = $(build_dir)/.merge
 
-cluster_avsc_link  = "http://iglucentral.com/schemas/com.snowplowanalytics.dataflowrunner/ClusterConfig/avro/1-1-0"
-playbook_avsc_link = "http://iglucentral.com/schemas/com.snowplowanalytics.dataflowrunner/PlaybookConfig/avro/1-0-1"
-
 tools_dir     = $(build_dir)/tools
 codegen_link  = "https://raw.githubusercontent.com/elodina/go-avro/master/codegen/codegen.go"
 codegen       = $(tools_dir)/codegen.go
 
-avro_dir      = $(build_dir)/avro
+avro_dir      = avro
 cluster_avsc  = $(avro_dir)/cluster.avsc
 playbook_avsc = $(avro_dir)/playbook.avsc
 
@@ -46,6 +43,8 @@ bin_linux     = $(linux_dir)/$(bin_name)
 bin_darwin    = $(darwin_dir)/$(bin_name)
 bin_windows   = $(windows_dir)/$(bin_name)
 
+gox           = "github.com/mitchellh/gox"
+
 # -----------------------------------------------------------------------------
 #  BUILDING
 # -----------------------------------------------------------------------------
@@ -68,21 +67,18 @@ $(merge_log): $(depend_log)
 $(build_log): cli-linux cli-darwin cli-windows
 	@echo Build success at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(build_log);
 
-cli-linux: $(merge_log) gox
-	gox -osarch=linux/amd64 -output=$(bin_linux) ./$(merge_src_dir)
+cli-linux: $(merge_log)
+	GO111MODULE=on go run $(gox) -osarch=linux/amd64 -output=$(bin_linux) ./$(merge_src_dir)
 	zip -rj $(output_dir)/dataflow_runner_$(version)_linux_amd64.zip $(bin_linux)
 
-cli-darwin: $(merge_log) gox
-	gox -osarch=darwin/amd64 -output=$(bin_darwin) ./$(merge_src_dir)
+cli-darwin: $(merge_log)
+	GO111MODULE=on go run $(gox) -osarch=darwin/amd64 -output=$(bin_darwin) ./$(merge_src_dir)
 	zip -rj $(output_dir)/dataflow_runner_$(version)_darwin_amd64.zip $(bin_darwin)
 
-cli-windows: $(merge_log) gox
+cli-windows: $(merge_log)
 	GO111MODULE=on go get github.com/konsorten/go-windows-terminal-sequences || true
-	gox -osarch=windows/amd64 -output=$(bin_windows) ./$(merge_src_dir)
+	GO111MODULE=on go run $(gox) -osarch=windows/amd64 -output=$(bin_windows) ./$(merge_src_dir)
 	zip -rj $(output_dir)/dataflow_runner_$(version)_windows_amd64.zip $(bin_windows).exe
-
-gox:
-	GO111MODULE=on go get -u github.com/mitchellh/gox
 
 # -----------------------------------------------------------------------------
 #  FORMATTING
@@ -121,17 +117,7 @@ clean:
 #  DEPENDENCIES
 # -----------------------------------------------------------------------------
 
-$(cluster_avsc):
-	mkdir -p $(avro_dir)
-	wget -N $(cluster_avsc_link) -O $(cluster_avsc)
-	sed -i 's/com.snowplowanalytics.dataflowrunner/com.snowplowanalytics.dataflowrunner.main/g' $(cluster_avsc)
-
-$(playbook_avsc):
-	mkdir -p $(avro_dir)
-	wget -N $(playbook_avsc_link) -O $(playbook_avsc)
-	sed -i 's/com.snowplowanalytics.dataflowrunner/com.snowplowanalytics.dataflowrunner.main/g' $(playbook_avsc)
-
-$(depend_log): $(cluster_avsc) $(playbook_avsc)
+$(depend_log):
 	rm -f $(depend_log)
 	rm -rf $(generated_dir)
 	mkdir -p $(generated_dir)
@@ -139,10 +125,7 @@ $(depend_log): $(cluster_avsc) $(playbook_avsc)
 
 	wget -N $(codegen_link) -O $(codegen)
 
-	GO111MODULE=on go get -u github.com/elodina/go-avro/...
 	GO111MODULE=on go run $(codegen) --schema $(cluster_avsc) --schema $(playbook_avsc) --out $(generated_schema)
-
-	GO111MODULE=on go get -u github.com/go-bindata/go-bindata/...
-	go-bindata -o $(generated_data) $(avro_dir)
+	GO111MODULE=on go run github.com/go-bindata/go-bindata/go-bindata -o $(generated_data) $(avro_dir)
 
 	@echo Dependencies generated at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(depend_log);
