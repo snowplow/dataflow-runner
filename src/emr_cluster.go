@@ -184,16 +184,17 @@ func (ec EmrCluster) GetJobFlowInput(keepJobFlowAliveWhenNoSteps bool) (*emr.Run
 
 	// RunJobFlowInput configs set
 	params := &emr.RunJobFlowInput{
-		Instances:         instances,
-		Name:              aws.String(ec.Config.Name),
-		JobFlowRole:       aws.String(ec.Config.Roles.Jobflow),
-		ServiceRole:       aws.String(ec.Config.Roles.Service),
-		LogUri:            aws.String(ec.Config.LogUri),
-		Tags:              ec.GetTags(),
-		BootstrapActions:  ec.GetBootstrapActions(),
-		Configurations:    ec.GetConfigurations(),
-		VisibleToAllUsers: aws.Bool(true),
-		Applications:      applications,
+		Instances:             instances,
+		Name:                  aws.String(ec.Config.Name),
+		JobFlowRole:           aws.String(ec.Config.Roles.Jobflow),
+		ServiceRole:           aws.String(ec.Config.Roles.Service),
+		LogUri:                aws.String(ec.Config.LogUri),
+		Tags:                  ec.GetTags(),
+		BootstrapActions:      ec.GetBootstrapActions(),
+		Configurations:        ec.GetConfigurations(),
+		VisibleToAllUsers:     aws.Bool(true),
+		Applications:          applications,
+		SecurityConfiguration: aws.String(ec.Config.SecurityConfiguration),
 	}
 
 	// Check to see if version < 4.x

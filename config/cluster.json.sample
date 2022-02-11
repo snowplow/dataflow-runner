@@ -80,6 +80,7 @@
         }
       }
     ],
-    "applications": [ "Hadoop", "Spark" ]
+    "applications": [ "Hadoop", "Spark" ],
+    "securityConfiguration": "mySecConfig"
   }
 }
