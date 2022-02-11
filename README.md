@@ -21,7 +21,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-[release-image]: https://img.shields.io/badge/release-0.6.1-6ad7e5.svg?style=flat
+[release-image]: https://img.shields.io/badge/release-0.7.0-6ad7e5.svg?style=flat
 [releases]: https://github.com/snowplow/dataflow-runner/releases
 
 [license-image]: https://img.shields.io/badge/license-Apache--2-blue.svg?style=flat

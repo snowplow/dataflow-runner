@@ -1,3 +1,9 @@
+Version 0.7.0 (2022-03-10)
+--------------------------
+Update cluster.json sample (#70)
+Add ability to set a SecurityConfiguration in RunJobFlowInput (#78)
+Remove build dependency on Iglu Central schemas (#79)
+
 Version 0.6.1 (2022-01-26)
 --------------------------
 Improve transient cluster termination policy (#76)
