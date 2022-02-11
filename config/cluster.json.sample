@@ -13,7 +13,7 @@
       "service": "EMR_DefaultRole"
     },
     "ec2": {
-      "amiVersion": "4.5.0",
+      "amiVersion": "5.34.0",
       "keyName": "some-key-name",
       "location": {
         "vpc": {
@@ -61,7 +61,7 @@
       {
         "name": "Elasticity Bootstrap Action",
         "scriptBootstrapAction": {
-          "path": "s3://snowplow-hosted-assets-us-east-1/common/emr/snowplow-ami4-bootstrap-0.2.0.sh",
+          "path": "s3://snowplow-hosted-assets-us-east-1/common/emr/snowplow-ami5-bootstrap-0.1.0.sh",
           "args": [ "1.5" ]
         }
       }
