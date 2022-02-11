@@ -304,6 +304,10 @@
         "type": "array",
         "items": "string"
       }, "null"]
+    },
+    {
+      "name": "securityConfiguration",
+      "type": "string"
     }
   ]
 }

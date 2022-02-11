@@ -29,8 +29,8 @@ import (
 )
 
 const (
-	clusterSchemaPath  = "build/avro/cluster.avsc"
-	playbookSchemaPath = "build/avro/playbook.avsc"
+	clusterSchemaPath  = "avro/cluster.avsc"
+	playbookSchemaPath = "avro/playbook.avsc"
 )
 
 var (
