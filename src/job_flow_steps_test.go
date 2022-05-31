@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"strings"
 
@@ -58,12 +59,17 @@ func (m *mockEMRAPISteps) DescribeStep(input *emr.DescribeStepInput) (*emr.Descr
 	if state == "" {
 		return nil, errors.New("DescribeStep failed")
 	}
+	testTime := time.Date(2019, time.October, 10, 23, 0, 0, 0, time.UTC)
 	return &emr.DescribeStepOutput{
 		Step: &emr.Step{
 			Name: aws.String("step"),
 			Id:   aws.String("step-id"),
 			Status: &emr.StepStatus{
 				State: aws.String(state),
+				Timeline: &emr.StepTimeline {
+					StartDateTime: &testTime,
+					EndDateTime: &testTime,
+				},
 			},
 		},
 	}, nil
@@ -195,7 +201,7 @@ func TestRetrieveStepsStates(t *testing.T) {
 	assert.NotNil(failedStepsIds)
 	assert.Equal(0, len(failedStepsIds))
 	assert.NotNil(infoLogs)
-	assert.Equal([]string{"Step 'step' with id 'step-id' completed successfully"}, infoLogs)
+	assert.Equal([]string{"Step 'step' with id 'step-id' completed successfully - StartTime: 2019-10-10T23:00:00Z - EndTime: 2019-10-10T23:00:00Z"}, infoLogs)
 	assert.NotNil(errorLogs)
 	assert.Equal(0, len(errorLogs))
 	assert.Nil(err)
@@ -237,7 +243,7 @@ func TestRetrieveStepState(t *testing.T) {
 	state, logs, err := jfs.RetrieveStepState(stepID)
 	assert.Equal("COMPLETED", state)
 	assert.NotNil(logs)
-	assert.Equal([]string{"Step 'step' with id 'step-id' completed successfully"}, logs)
+	assert.Equal([]string{"Step 'step' with id 'step-id' completed successfully - StartTime: 2019-10-10T23:00:00Z - EndTime: 2019-10-10T23:00:00Z"}, logs)
 	assert.Nil(err)
 
 	// log cancelled steps
@@ -253,14 +259,14 @@ func TestRetrieveStepState(t *testing.T) {
 	state, logs, err = jfs.RetrieveStepState(stepID)
 	assert.Equal("FAILED", state)
 	assert.NotNil(logs)
-	assert.Equal([]string{"Step 'step' with id 'step-id' was FAILED"}, logs)
+	assert.Equal([]string{"Step 'step' with id 'step-id' was FAILED - StartTime: 2019-10-10T23:00:00Z - EndTime: 2019-10-10T23:00:00Z"}, logs)
 	assert.Nil(err)
 
 	// ignores steps that are running
 	jfs = mockJobFlowStepsWithoutPlaybook("j-RUNNING")
 	state, logs, err = jfs.RetrieveStepState(stepID)
 	assert.Equal("RUNNING", state)
-	assert.Nil(logs)
+	assert.Equal([]string{}, logs)
 	assert.Nil(err)
 }
 

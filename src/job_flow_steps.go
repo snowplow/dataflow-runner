@@ -217,17 +217,22 @@ func (jfs JobFlowSteps) RetrieveStepState(stepID string) (string, []string, erro
 		return "", nil, errwrap.Wrapf("Couldn't retrieve step "+stepID+" state: {{err}}", err)
 	}
 
+	logs := make([]string, 0)
+	logMessageHead := "Step '" + *dso.Step.Name + "' with id '" + *dso.Step.Id
 	if *dso.Step.Status.State == "COMPLETED" {
-		infoLogs := []string{
-			"Step '" + *dso.Step.Name + "' with id '" + *dso.Step.Id + "' completed successfully"}
-		return *dso.Step.Status.State, infoLogs, nil
-	} else if *dso.Step.Status.State == "CANCELLED" || *dso.Step.Status.State == "FAILED" {
-		errorLogs := make([]string, 0)
-		errorLogs = append(errorLogs,
-			"Step '"+*dso.Step.Name+"' with id '"+*dso.Step.Id+"' was "+*dso.Step.Status.State)
-		return *dso.Step.Status.State, errorLogs, nil
+		logs = append(logs, logMessageHead+"' completed successfully"+jfs.CreateStepStartFinishTimeLog(dso))
+	} else if *dso.Step.Status.State == "FAILED" {
+		logs = append(logs, logMessageHead+"' was FAILED"+jfs.CreateStepStartFinishTimeLog(dso))
+	} else if *dso.Step.Status.State == "CANCELLED" {
+		logs = append(logs, logMessageHead+"' was CANCELLED")
 	}
-	return *dso.Step.Status.State, nil, nil
+	return *dso.Step.Status.State, logs, nil
+}
+
+func (jfs JobFlowSteps) CreateStepStartFinishTimeLog(dso *emr.DescribeStepOutput) string {
+	timeFormat := "2006-01-02T15:04:05Z"
+	return " - StartTime: " + (*dso.Step.Status.Timeline.StartDateTime).Format(timeFormat) +
+		" - EndTime: " + (*dso.Step.Status.Timeline.EndDateTime).Format(timeFormat)
 }
 
 // GetJobFlowStepsInput parses the config given to it and
