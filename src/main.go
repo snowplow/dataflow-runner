@@ -278,15 +278,16 @@ func main() {
 				log.Info("EMR cluster with ID [" + jobFlowSteps.JobflowID + "] is terminated successfully")
 
 				failedStepIDs, err := jobFlowSteps.GetFailedStepIDs()
+
+				if logFailedSteps && len(failedStepIDs) > 0 {
+					displayFailedStepsLogs(failedStepIDs, emrPlaybook, jobFlowSteps.JobflowID, vars)
+				}
+
 				if err != nil {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
 					}
 					return exitCodeError(err)
-				}
-
-				if logFailedSteps && len(failedStepIDs) > 0 {
-					displayFailedStepsLogs(failedStepIDs, emrPlaybook, jobFlowSteps.JobflowID, vars)
 				}
 
 				log.Info("Transient EMR run completed successfully")
