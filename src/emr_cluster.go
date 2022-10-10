@@ -24,6 +24,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/emr"
 	"github.com/aws/aws-sdk-go/service/emr/emriface"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/snowplow-devops/go-retry"
 )
 
 const (
@@ -61,7 +63,9 @@ func (ec EmrCluster) TerminateJobFlow(jobflowID string) error {
 		JobFlowIds: []*string{aws.String(jobflowID)},
 	}
 
-	_, err := ec.Svc.TerminateJobFlows(&terminateJobFlowsInput)
+	_, err := retry.ExponentialWithInterface(3, time.Second, "emr.TerminateJobFlow", func() (interface{}, error) {
+		return ec.Svc.TerminateJobFlows(&terminateJobFlowsInput)
+	})
 	if err != nil {
 		return err
 	}
@@ -85,19 +89,21 @@ func (ec EmrCluster) runJobFlow(sleepTime int) (string, error) {
 	}
 
 	var done = false
-	var retry = 3
+	var retryCount = 3
 	var clusterState string
 	var jobflowID string
 
-	for done == false && retry > 0 {
-		resp, err := ec.Svc.RunJobFlow(params)
+	for done == false && retryCount > 0 {
+		resp, err := retry.ExponentialWithInterface(3, time.Second, "emr.RunJobFlow", func() (interface{}, error) {
+			return ec.Svc.RunJobFlow(params)
+		})
 		if err != nil {
 			return "", err
 		}
 
 		log.Info("Launching EMR cluster with name '" + ec.Config.Name + "'...")
 
-		clusterStatus, err := ec.waitForState(*resp.JobFlowId, "WAITING",
+		clusterStatus, err := ec.waitForState(*resp.(*emr.RunJobFlowOutput).JobFlowId, "WAITING",
 			[]string{"TERMINATED_WITH_ERRORS", "TERMINATED", "TERMINATING", "WAITING"})
 		if err != nil {
 			return "", err
@@ -107,7 +113,7 @@ func (ec EmrCluster) runJobFlow(sleepTime int) (string, error) {
 			clusterStatus.StateChangeReason.Code != nil &&
 			*clusterStatus.StateChangeReason.Code == "BOOTSTRAP_FAILURE" {
 
-			retry--
+			retryCount--
 
 			timeout := rand.Intn(sleepTime)
 			log.Error("Bootstrap failure detected, retrying in " + strconv.Itoa(timeout) + " seconds...")
@@ -117,10 +123,10 @@ func (ec EmrCluster) runJobFlow(sleepTime int) (string, error) {
 		}
 
 		clusterState = *clusterStatus.State
-		jobflowID = *resp.JobFlowId
+		jobflowID = *resp.(*emr.RunJobFlowOutput).JobFlowId
 	}
 
-	if retry <= 0 {
+	if retryCount <= 0 {
 		return "", errors.New("could not start the cluster due to bootstrap failure")
 	}
 
@@ -135,23 +141,27 @@ func (ec EmrCluster) runJobFlow(sleepTime int) (string, error) {
 func (ec EmrCluster) waitForState(jobflowID string, neededState string, exitStates []string) (*emr.ClusterStatus, error) {
 	cluster := &emr.DescribeClusterInput{ClusterId: aws.String(jobflowID)}
 
-	resp, err := ec.Svc.DescribeCluster(cluster)
+	resp, err := retry.ExponentialWithInterface(3, time.Second, "emr.DescribeCluster", func() (interface{}, error) {
+		return ec.Svc.DescribeCluster(cluster)
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	for !StringInSlice(*resp.Cluster.Status.State, exitStates) {
-		log.Info("EMR cluster is in state " + *resp.Cluster.Status.State + " - need state " + neededState + ", checking again in " + strconv.Itoa(invalidStateSleepSeconds) + " seconds...")
+	for !StringInSlice(*resp.(*emr.DescribeClusterOutput).Cluster.Status.State, exitStates) {
+		log.Info("EMR cluster is in state " + *resp.(*emr.DescribeClusterOutput).Cluster.Status.State + " - need state " + neededState + ", checking again in " + strconv.Itoa(invalidStateSleepSeconds) + " seconds...")
 
 		time.Sleep(time.Second * invalidStateSleepSeconds)
 
-		resp, err = ec.Svc.DescribeCluster(cluster)
+		resp, err = retry.ExponentialWithInterface(3, time.Second, "emr.DescribeCluster", func() (interface{}, error) {
+			return ec.Svc.DescribeCluster(cluster)
+		})
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	return resp.Cluster.Status, nil
+	return resp.(*emr.DescribeClusterOutput).Cluster.Status, nil
 }
 
 // --- Parameter builders

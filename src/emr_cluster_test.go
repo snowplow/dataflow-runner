@@ -125,12 +125,12 @@ func TestTerminateJobFlow_Fail(t *testing.T) {
 	// fails if TerminateJobFlows fails
 	err := ec.TerminateJobFlow("hello")
 	assert.NotNil(err)
-	assert.Equal("TerminateJobFlows failed", err.Error())
+	assert.Equal("emr.TerminateJobFlow: TerminateJobFlows failed", err.Error())
 
 	// fails if DescribeCluster fails
 	err = ec.TerminateJobFlow("j-123")
 	assert.NotNil(err)
-	assert.Equal("DescribeCluster failed", err.Error())
+	assert.Equal("emr.DescribeCluster: DescribeCluster failed", err.Error())
 }
 
 func TestTerminateJobFlow_Success(t *testing.T) {
@@ -156,14 +156,14 @@ func TestRunJobFlow_Fail(t *testing.T) {
 	ec = mockEmrCluster(*record)
 	_, err = ec.runJobFlow(3)
 	assert.NotNil(err)
-	assert.Equal("RunJobFlow failed", err.Error())
+	assert.Equal("emr.RunJobFlow: RunJobFlow failed", err.Error())
 
 	// fails if DescribeCluster fails
 	record.Name = "123"
 	ec = mockEmrCluster(*record)
 	_, err = ec.runJobFlow(3)
 	assert.NotNil(err)
-	assert.Equal("DescribeCluster failed", err.Error())
+	assert.Equal("emr.DescribeCluster: DescribeCluster failed", err.Error())
 
 	// fails if 3 or more retries
 	record.Name = "TERMINATED"
