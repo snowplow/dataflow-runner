@@ -30,6 +30,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/emr"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
+
+	"github.com/getsentry/sentry-go"
 )
 
 const (
@@ -48,6 +50,7 @@ const (
 	fLock            = "lock"
 	fSoftLock        = "softLock"
 	fConsul          = "consul"
+	fSentry          = "sentry"
 	lockHeldExitCode = 17
 	otherExitCode    = 1
 )
@@ -103,14 +106,25 @@ func main() {
 			Flags: []cli.Flag{
 				getEmrConfigFlag(),
 				getVarsFlag(),
+				getSentryFlag(),
 			},
 			Action: func(c *cli.Context) error {
+				sentry := c.String(fSentry)
+				sentryEnabled := len(sentry) > 0
+
+				if sentryEnabled {
+					err := initializeSentry(sentry)
+					if err != nil {
+						return cli.NewExitError(err, otherExitCode)
+					}
+				}
+
 				jobflowID, err := up(
 					c.String(fEmrConfig),
 					c.String(fVars),
 				)
 				if err != nil {
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				}
 
 				log.Info("EMR cluster launched successfully; Jobflow ID: " + jobflowID)
@@ -129,6 +143,7 @@ func main() {
 				getSoftLockFlag(),
 				getConsulFlag(),
 				getVarsFlag(),
+				getSentryFlag(),
 			},
 			Action: func(c *cli.Context) error {
 				emrPlaybook := c.String(fEmrPlaybook)
@@ -139,15 +154,24 @@ func main() {
 				softLock := c.String(fSoftLock)
 				consul := c.String(fConsul)
 				vars := c.String(fVars)
+				sentry := c.String(fSentry)
+				sentryEnabled := len(sentry) > 0
+
+				if sentryEnabled {
+					err := initializeSentry(sentry)
+					if err != nil {
+						return cli.NewExitError(err, otherExitCode)
+					}
+				}
 
 				err := checkLockFlags(async, hardLock, softLock, consul)
 				if err != nil {
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				}
 
 				lock, err := initLock(hardLock, softLock, consul)
 				if err != nil {
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				}
 
 				failedStepsIDs, err := run(emrPlaybook, jobflowID, async, vars)
@@ -166,7 +190,7 @@ func main() {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
 					}
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				} else if lock != nil {
 					lock.Unlock()
 				}
@@ -183,15 +207,26 @@ func main() {
 				getEmrConfigFlag(),
 				getEmrClusterFlag(),
 				getVarsFlag(),
+				getSentryFlag(),
 			},
 			Action: func(c *cli.Context) error {
+				sentry := c.String(fSentry)
+				sentryEnabled := len(sentry) > 0
+
+				if sentryEnabled {
+					err := initializeSentry(sentry)
+					if err != nil {
+						return cli.NewExitError(err, otherExitCode)
+					}
+				}
+
 				err := down(
 					c.String(fEmrConfig),
 					c.String(fEmrCluster),
 					c.String(fVars),
 				)
 				if err != nil {
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				}
 
 				log.Info("EMR cluster terminated successfully")
@@ -209,6 +244,7 @@ func main() {
 				getSoftLockFlag(),
 				getConsulFlag(),
 				getVarsFlag(),
+				getSentryFlag(),
 			},
 			Action: func(c *cli.Context) error {
 				emrConfig := c.String(fEmrConfig)
@@ -218,25 +254,34 @@ func main() {
 				softLock := c.String(fSoftLock)
 				consul := c.String(fConsul)
 				vars := c.String(fVars)
+				sentry := c.String(fSentry)
+				sentryEnabled := len(sentry) > 0
+
+				if sentryEnabled {
+					err := initializeSentry(sentry)
+					if err != nil {
+						return cli.NewExitError(err, otherExitCode)
+					}
+				}
 
 				clusterRecord, err := parseClusterRecord(emrConfig, vars)
 				if err != nil {
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				}
 
 				playbookRecord, err := parsePlaybookRecord(emrPlaybook, vars)
 				if err != nil {
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				}
 
 				err = checkLockFlags(false, hardLock, softLock, consul)
 				if err != nil {
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				}
 
 				lock, err := initLock(hardLock, softLock, consul)
 				if err != nil {
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				}
 
 				emrCluster, err := InitEmrCluster(*clusterRecord)
@@ -244,7 +289,7 @@ func main() {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
 					}
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				}
 
 				jobFlowSteps, err := runJobFlowWithSteps(emrCluster, playbookRecord)
@@ -252,7 +297,7 @@ func main() {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
 					}
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				}
 
 				log.Info("Transient EMR run with jobflow ID [" + jobFlowSteps.JobflowID + "] started successfully")
@@ -272,7 +317,7 @@ func main() {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
 					}
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				}
 
 				log.Info("EMR cluster with ID [" + jobFlowSteps.JobflowID + "] is terminated successfully")
@@ -287,7 +332,7 @@ func main() {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
 					}
-					return exitCodeError(err)
+					return exitCodeError(sentryEnabled, err)
 				}
 
 				log.Info("Transient EMR run completed successfully")
@@ -356,6 +401,13 @@ func getConsulFlag() cli.StringFlag {
 	return cli.StringFlag{
 		Name:  fConsul,
 		Usage: "Address of the Consul server used for distributed locking",
+	}
+}
+
+func getSentryFlag() cli.StringFlag {
+	return cli.StringFlag{
+		Name:  fSentry,
+		Usage: "The Sentry DSN to send errors to",
 	}
 }
 
@@ -496,6 +548,14 @@ func downWithConfig(clusterRecord *ClusterConfig, emrCluster string) error {
 
 // --- Helpers
 
+func initializeSentry(dsn string) error {
+	log.Info("Initializing sentry with dsn: " + dsn)
+	return sentry.Init(sentry.ClientOptions{
+		Dsn:     dsn,
+		Release: cliVersion,
+	})
+}
+
 // flagToError returns a generic error for a missing flag
 func flagToError(flag string) error {
 	return errors.New("--" + flag + " needs to be specified")
@@ -538,7 +598,12 @@ func varsToMap(vars string) (map[string]interface{}, error) {
 }
 
 // exitCodeError turns an error into an exit code aware error
-func exitCodeError(err error) error {
+func exitCodeError(sentryEnabled bool, err error) error {
+	if sentryEnabled {
+		sentry.CaptureException(err)
+		sentry.Flush(time.Second * 5)
+	}
+
 	switch err.(type) {
 	case LockHeldError:
 		log.Warn(err.Error())
