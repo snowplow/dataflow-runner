@@ -38,7 +38,7 @@ const (
 	appName          = "dataflow-runner"
 	appUsage         = "Run templatable playbooks of Hadoop/Spark/et al jobs on Amazon EMR"
 	appCopyright     = "(c) 2016-2022 Snowplow Analytics Ltd"
-	cliVersion       = "0.7.1"
+	cliVersion       = "0.7.2"
 	varDelim         = ","
 	fEmrConfig       = "emr-config"
 	fEmrPlaybook     = "emr-playbook"
@@ -76,8 +76,8 @@ func main() {
 	app.Compiled = time.Now()
 	app.Authors = []cli.Author{
 		{
-			Name:  "Joshua Beemster",
-			Email: "support@snowplowanalytics.com",
+			Name:  "Snowplow Analytics",
+			Email: "support@snowplow.io",
 		},
 	}
 	app.Flags = []cli.Flag{
