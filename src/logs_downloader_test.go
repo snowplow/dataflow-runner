@@ -192,7 +192,7 @@ func TestGetBucketAndPrefix_Fail(t *testing.T) {
 	ld := mockLogsDownloader("error")
 	_, _, err := ld.GetBucketAndPrefix()
 	assert.NotNil(err)
-	assert.Equal("Couldn't fetch LogUri: DescribeCluster failed", err.Error())
+	assert.Equal("Couldn't fetch LogUri: emr.DescribeCluster: DescribeCluster failed", err.Error())
 
 	// fails if LogUri is empty
 	ld = mockLogsDownloader("test-get-bucket-empty-log-uri")

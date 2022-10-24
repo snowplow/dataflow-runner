@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -29,6 +30,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager/s3manageriface"
 	"github.com/hashicorp/errwrap"
+	"github.com/snowplow-devops/go-retry"
 )
 
 // LogsDownloader is used to download failed steps' logs
@@ -94,12 +96,14 @@ func (ld LogsDownloader) GetStepLogs(stepID string) (map[string]string, error) {
 // logging to
 func (ld LogsDownloader) GetBucketAndPrefix() (string, string, error) {
 	describeClusterInput := &emr.DescribeClusterInput{ClusterId: aws.String(ld.JobflowID)}
-	describeClusterOutput, err := ld.EmrSvc.DescribeCluster(describeClusterInput)
+	describeClusterOutput, err := retry.ExponentialWithInterface(3, time.Second, "emr.DescribeCluster", func() (interface{}, error) {
+		return ld.EmrSvc.DescribeCluster(describeClusterInput)
+	})
 	if err != nil {
 		return "", "", errwrap.Wrapf("Couldn't fetch LogUri: {{err}}", err)
 	}
 
-	rawLogURI := *describeClusterOutput.Cluster.LogUri
+	rawLogURI := *describeClusterOutput.(*emr.DescribeClusterOutput).Cluster.LogUri
 	if rawLogURI == "" {
 		return "", "", errors.New("LogUri cannot be empty for the logs to be retrieved")
 	}

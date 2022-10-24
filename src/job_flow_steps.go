@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/emr/emriface"
 	"github.com/hashicorp/errwrap"
 	log "github.com/sirupsen/logrus"
+	"github.com/snowplow-devops/go-retry"
 )
 
 // JobFlowSteps is used for adding steps to an existing cluster
@@ -116,7 +117,9 @@ func (jfs JobFlowSteps) AddJobFlowSteps() ([]string, error) {
 	historicalInfoLogs := []string{}
 	historicalErrorLogs := []string{}
 
-	addJobFlowStepsOutput, err := jfs.EmrSvc.AddJobFlowSteps(params)
+	addJobFlowStepsOutput, err := retry.ExponentialWithInterface(3, time.Second, "emr.AddJobFlowSteps", func() (interface{}, error) {
+		return jfs.EmrSvc.AddJobFlowSteps(params)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +129,7 @@ func (jfs JobFlowSteps) AddJobFlowSteps() ([]string, error) {
 
 	for done == false && jfs.IsBlocking == true {
 		successCount, errCount, fStepsIDs, infoLogs, errorLogs, err :=
-			jfs.RetrieveStepsStates(addJobFlowStepsOutput.StepIds)
+			jfs.RetrieveStepsStates(addJobFlowStepsOutput.(*emr.AddJobFlowStepsOutput).StepIds)
 		if err != nil {
 			return nil, err
 		}
@@ -141,7 +144,7 @@ func (jfs JobFlowSteps) AddJobFlowSteps() ([]string, error) {
 		historicalInfoLogs = infoLogs
 		historicalErrorLogs = errorLogs
 
-		if (successCount + errorCount) == len(addJobFlowStepsOutput.StepIds) {
+		if (successCount + errorCount) == len(addJobFlowStepsOutput.(*emr.AddJobFlowStepsOutput).StepIds) {
 			done = true
 			failedStepsIDs = fStepsIDs
 		} else {
@@ -154,7 +157,7 @@ func (jfs JobFlowSteps) AddJobFlowSteps() ([]string, error) {
 		return nil, nil
 	}
 	return failedStepsIDs, errors.New("" + strconv.Itoa(errorCount) + "/" +
-		strconv.Itoa(len(addJobFlowStepsOutput.StepIds)) + " steps failed to complete successfully")
+		strconv.Itoa(len(addJobFlowStepsOutput.(*emr.AddJobFlowStepsOutput).StepIds)) + " steps failed to complete successfully")
 }
 
 func (jfs JobFlowSteps) GetStepIDs() ([]*string, error) {
@@ -165,12 +168,14 @@ func (jfs JobFlowSteps) GetStepIDs() ([]*string, error) {
 		ClusterId: aws.String(jfs.JobflowID),
 	}
 
-	listStepsOutput, err := jfs.EmrSvc.ListSteps(listStepsInput)
+	listStepsOutput, err := retry.ExponentialWithInterface(3, time.Second, "emr.ListSteps", func() (interface{}, error) {
+		return jfs.EmrSvc.ListSteps(listStepsInput)
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	for _, step := range listStepsOutput.Steps {
+	for _, step := range listStepsOutput.(*emr.ListStepsOutput).Steps {
 		stepIDs = append(stepIDs, step.Id)
 	}
 
@@ -212,21 +217,23 @@ func (jfs JobFlowSteps) RetrieveStepState(stepID string) (string, []string, erro
 		ClusterId: aws.String(jfs.JobflowID),
 		StepId:    aws.String(stepID),
 	}
-	dso, err := jfs.EmrSvc.DescribeStep(describeStepInput)
+	dso, err := retry.ExponentialWithInterface(3, time.Second, "emr.DescribeStep", func() (interface{}, error) {
+		return jfs.EmrSvc.DescribeStep(describeStepInput)
+	})
 	if err != nil {
 		return "", nil, errwrap.Wrapf("Couldn't retrieve step "+stepID+" state: {{err}}", err)
 	}
 
 	logs := make([]string, 0)
-	logMessageHead := "Step '" + *dso.Step.Name + "' with id '" + *dso.Step.Id
-	if *dso.Step.Status.State == "COMPLETED" {
-		logs = append(logs, logMessageHead+"' completed successfully"+jfs.CreateStepStartFinishTimeLog(dso))
-	} else if *dso.Step.Status.State == "FAILED" {
-		logs = append(logs, logMessageHead+"' was FAILED"+jfs.CreateStepStartFinishTimeLog(dso))
-	} else if *dso.Step.Status.State == "CANCELLED" {
+	logMessageHead := "Step '" + *dso.(*emr.DescribeStepOutput).Step.Name + "' with id '" + *dso.(*emr.DescribeStepOutput).Step.Id
+	if *dso.(*emr.DescribeStepOutput).Step.Status.State == "COMPLETED" {
+		logs = append(logs, logMessageHead+"' completed successfully"+jfs.CreateStepStartFinishTimeLog(dso.(*emr.DescribeStepOutput)))
+	} else if *dso.(*emr.DescribeStepOutput).Step.Status.State == "FAILED" {
+		logs = append(logs, logMessageHead+"' was FAILED"+jfs.CreateStepStartFinishTimeLog(dso.(*emr.DescribeStepOutput)))
+	} else if *dso.(*emr.DescribeStepOutput).Step.Status.State == "CANCELLED" {
 		logs = append(logs, logMessageHead+"' was CANCELLED")
 	}
-	return *dso.Step.Status.State, logs, nil
+	return *dso.(*emr.DescribeStepOutput).Step.Status.State, logs, nil
 }
 
 func (jfs JobFlowSteps) CreateStepStartFinishTimeLog(dso *emr.DescribeStepOutput) string {

@@ -66,9 +66,9 @@ func (m *mockEMRAPISteps) DescribeStep(input *emr.DescribeStepInput) (*emr.Descr
 			Id:   aws.String("step-id"),
 			Status: &emr.StepStatus{
 				State: aws.String(state),
-				Timeline: &emr.StepTimeline {
+				Timeline: &emr.StepTimeline{
 					StartDateTime: &testTime,
-					EndDateTime: &testTime,
+					EndDateTime:   &testTime,
 				},
 			},
 		},
@@ -120,13 +120,13 @@ func TestAddJobFlowSteps_Fail(t *testing.T) {
 	// fails if emr.AddJobFlowSteps fails
 	_, err := jfs.AddJobFlowSteps()
 	assert.NotNil(err)
-	assert.Equal("AddJobFlowSteps failed", err.Error())
+	assert.Equal("emr.AddJobFlowSteps: AddJobFlowSteps failed", err.Error())
 
 	// fails if DescribeStep fails
 	jfs.JobflowID = "j-123"
 	_, err = jfs.AddJobFlowSteps()
 	assert.NotNil(err)
-	assert.Equal("Couldn't retrieve step 1 state: DescribeStep failed", err.Error())
+	assert.Equal("Couldn't retrieve step 1 state: emr.DescribeStep: DescribeStep failed", err.Error())
 
 	// fails if the number of errors is > 0
 	stepID := "step-id"
@@ -231,7 +231,7 @@ func TestRetrieveStepsStates_Fail(t *testing.T) {
 	assert.Nil(infoLogs)
 	assert.Nil(errorLogs)
 	assert.NotNil(err)
-	assert.Equal("Couldn't retrieve step step-id state: DescribeStep failed", err.Error())
+	assert.Equal("Couldn't retrieve step step-id state: emr.DescribeStep: DescribeStep failed", err.Error())
 }
 
 func TestRetrieveStepState(t *testing.T) {
@@ -280,5 +280,5 @@ func TestRetrieveStepState_Fail(t *testing.T) {
 	assert.Equal("", state)
 	assert.Nil(logs)
 	assert.NotNil(err)
-	assert.Equal("Couldn't retrieve step step-id state: DescribeStep failed", err.Error())
+	assert.Equal("Couldn't retrieve step step-id state: emr.DescribeStep: DescribeStep failed", err.Error())
 }
