@@ -1,4 +1,4 @@
-.PHONY: all cli-linux cli-darwin cli-windows format lint test clean
+.PHONY: all cli-linux cli-darwin cli-windows format lint test clean docker-build docker-cross-build-publish
 
 # -----------------------------------------------------------------------------
 #  CONSTANTS
@@ -43,6 +43,8 @@ bin_linux     = $(linux_dir)/$(bin_name)
 bin_darwin    = $(darwin_dir)/$(bin_name)
 bin_windows   = $(windows_dir)/$(bin_name)
 
+container_name = snowplow/$(bin_name)
+
 gox           = "github.com/mitchellh/gox"
 
 # -----------------------------------------------------------------------------
@@ -68,17 +70,28 @@ $(build_log): cli-linux cli-darwin cli-windows
 	@echo Build success at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(build_log);
 
 cli-linux: $(merge_log)
-	GO111MODULE=on go run $(gox) -osarch=linux/amd64 -output=$(bin_linux) ./$(merge_src_dir)
+	GO111MODULE=on CGO_ENABLED=0 go run $(gox) -osarch=linux/amd64 -output=$(bin_linux) ./$(merge_src_dir)
 	zip -rj $(output_dir)/dataflow_runner_$(version)_linux_amd64.zip $(bin_linux)
 
 cli-darwin: $(merge_log)
-	GO111MODULE=on go run $(gox) -osarch=darwin/amd64 -output=$(bin_darwin) ./$(merge_src_dir)
+	GO111MODULE=on CGO_ENABLED=0 go run $(gox) -osarch=darwin/amd64 -output=$(bin_darwin) ./$(merge_src_dir)
 	zip -rj $(output_dir)/dataflow_runner_$(version)_darwin_amd64.zip $(bin_darwin)
 
 cli-windows: $(merge_log)
 	GO111MODULE=on go get github.com/konsorten/go-windows-terminal-sequences || true
-	GO111MODULE=on go run $(gox) -osarch=windows/amd64 -output=$(bin_windows) ./$(merge_src_dir)
+	GO111MODULE=on CGO_ENABLED=0 go run $(gox) -osarch=windows/amd64 -output=$(bin_windows) ./$(merge_src_dir)
 	zip -rj $(output_dir)/dataflow_runner_$(version)_windows_amd64.zip $(bin_windows).exe
+
+docker-build: cli-linux
+	docker build -t $(container_name):$(version) .
+	docker tag ${container_name}:${version} ${container_name}:latest
+
+# -----------------------------------------------------------------------------
+#  RELEASE
+# -----------------------------------------------------------------------------
+
+docker-cross-build-publish: cli-linux
+	docker buildx build --platform linux/amd64,linux/arm64 --tag $(container_name):$(version) --tag $(container_name):latest --push .
 
 # -----------------------------------------------------------------------------
 #  FORMATTING
