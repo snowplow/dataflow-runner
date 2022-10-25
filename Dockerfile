@@ -2,7 +2,7 @@ FROM alpine:3.16.2
 
 LABEL maintainer="Snowplow Analytics <support@snowplow.io>"
 
-ARG DF_RUNNER_HOME
+ARG DF_RUNNER_HOME=.
 
 ENV DF_RUNNER_HOME ${DF_RUNNER_HOME}
 
