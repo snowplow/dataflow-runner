@@ -1,3 +1,9 @@
+Version 0.7.3 (2022-10-27)
+--------------------------
+Bump golang to 1.19.2 (#89)
+Publish docker image (#73)
+Retry all EMR API calls (#87)
+
 Version 0.7.2 (2022-10-12)
 --------------------------
 Integrate Sentry (#86)
