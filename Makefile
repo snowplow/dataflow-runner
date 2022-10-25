@@ -1,4 +1,4 @@
-.PHONY: all cli-linux cli-darwin cli-windows format lint test clean docker-build docker-publish
+.PHONY: all cli-linux cli-darwin cli-windows format lint test clean docker-build docker-cross-build-publish
 
 # -----------------------------------------------------------------------------
 #  CONSTANTS
@@ -90,9 +90,8 @@ docker-build: cli-linux
 #  RELEASE
 # -----------------------------------------------------------------------------
 
-docker-publish:
-	docker push $(container_name):$(version)
-	docker push $(container_name):latest
+docker-cross-build-publish: cli-linux
+	docker buildx build --platform linux/amd64,linux/arm64 --tag $(container_name):$(version) --tag $(container_name):latest --push .
 
 # -----------------------------------------------------------------------------
 #  FORMATTING
