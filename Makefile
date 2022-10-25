@@ -1,4 +1,4 @@
-.PHONY: all cli-linux cli-darwin cli-windows format lint test clean docker-build docker-publish
+.PHONY: all cli-linux cli-darwin cli-windows format lint test clean docker-build docker-cross-build docker-publish
 
 # -----------------------------------------------------------------------------
 #  CONSTANTS
@@ -85,6 +85,9 @@ cli-windows: $(merge_log)
 docker-build: cli-linux
 	docker build -t $(container_name):$(version) .
 	docker tag ${container_name}:${version} ${container_name}:latest
+
+docker-cross-build: cli-linux
+	docker buildx build --platform linux/amd64,linux/arm64 --tag $(container_name):$(version) --tag $(container_name):latest --push .
 
 # -----------------------------------------------------------------------------
 #  RELEASE
