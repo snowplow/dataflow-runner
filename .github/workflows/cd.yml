@@ -30,22 +30,22 @@ jobs:
       id: get_version
       run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
 
-    - name: Create Release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-      with:
-        tag_name: ${{ steps.get_version.outputs.VERSION }}
-        release_name: Version ${{ steps.get_version.outputs.VERSION }}
-        draft: false
-        prerelease: false
+    # - name: Create Release
+    #   uses: actions/create-release@v1
+    #   env:
+    #     GITHUB_TOKEN: ${{ github.token }}
+    #   with:
+    #     tag_name: ${{ steps.get_version.outputs.VERSION }}
+    #     release_name: Version ${{ steps.get_version.outputs.VERSION }}
+    #     draft: false
+    #     prerelease: false
 
-    - name: Upload release binaries
-      uses: alexellis/upload-assets@0.2.3
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-      with:
-        asset_paths: '["./build/bin/*.zip"]'
+    # - name: Upload release binaries
+    #   uses: alexellis/upload-assets@0.2.3
+    #   env:
+    #     GITHUB_TOKEN: ${{ github.token }}
+    #   with:
+    #     asset_paths: '["./build/bin/*.zip"]'
 
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v2
@@ -62,6 +62,8 @@ jobs:
     - name: Build and push to DockerHub
       uses: docker/build-push-action@v3
       with:
+        file: $GITHUB_WORKSPACE/Dockerfile
+        build-args: DF_RUNNER_HOME=$GITHUB_WORKSPACE
         platforms: linux/amd64,linux/arm64/v8
         push: true
         tags: snowplow/dataflow-runner:latest,snowplow/dataflow-runner:${{ steps.get_version.outputs.VERSION }}
