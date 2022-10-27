@@ -62,7 +62,7 @@ $(merge_log): $(depend_log)
 	cp $(filter-out $(go_test_files), $(shell find $(src_dir) -maxdepth 5 -name "*.go")) $(merge_src_dir)
 	cp $(shell find $(src_dir) -maxdepth 5 -name "*_test.go") $(merge_src_dir)
 
-	GO111MODULE=on go get -t ./$(merge_src_dir)
+	go get -t ./$(merge_src_dir)
 
 	@echo Source merged at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(merge_log);
 
@@ -70,16 +70,16 @@ $(build_log): cli-linux cli-darwin cli-windows
 	@echo Build success at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(build_log);
 
 cli-linux: $(merge_log)
-	GO111MODULE=on CGO_ENABLED=0 go run $(gox) -osarch=linux/amd64 -output=$(bin_linux) ./$(merge_src_dir)
+	CGO_ENABLED=0 go run $(gox) -osarch=linux/amd64 -output=$(bin_linux) ./$(merge_src_dir)
 	zip -rj $(output_dir)/dataflow_runner_$(version)_linux_amd64.zip $(bin_linux)
 
 cli-darwin: $(merge_log)
-	GO111MODULE=on CGO_ENABLED=0 go run $(gox) -osarch=darwin/amd64 -output=$(bin_darwin) ./$(merge_src_dir)
+	CGO_ENABLED=0 go run $(gox) -osarch=darwin/amd64 -output=$(bin_darwin) ./$(merge_src_dir)
 	zip -rj $(output_dir)/dataflow_runner_$(version)_darwin_amd64.zip $(bin_darwin)
 
 cli-windows: $(merge_log)
-	GO111MODULE=on go get github.com/konsorten/go-windows-terminal-sequences || true
-	GO111MODULE=on CGO_ENABLED=0 go run $(gox) -osarch=windows/amd64 -output=$(bin_windows) ./$(merge_src_dir)
+	go get github.com/konsorten/go-windows-terminal-sequences || true
+	CGO_ENABLED=0 go run $(gox) -osarch=windows/amd64 -output=$(bin_windows) ./$(merge_src_dir)
 	zip -rj $(output_dir)/dataflow_runner_$(version)_windows_amd64.zip $(bin_windows).exe
 
 docker-build: cli-linux
@@ -98,11 +98,11 @@ docker-cross-build-publish: cli-linux
 # -----------------------------------------------------------------------------
 
 format:
-	GO111MODULE=on go fmt ./$(src_dir)
+	go fmt ./$(src_dir)
 	gofmt -s -w ./$(src_dir)
 
 lint:
-	GO111MODULE=on go get -u golang.org/x/lint/golint
+	go get -u golang.org/x/lint/golint
 	golint ./$(src_dir)
 
 # -----------------------------------------------------------------------------
@@ -111,13 +111,13 @@ lint:
 
 test: $(merge_log)
 	mkdir -p $(coverage_dir)
-	GO111MODULE=on go test -parallel=1 ./$(merge_src_dir) -tags test -v -covermode=count -coverprofile=$(coverage_out)
+	go test -parallel=1 ./$(merge_src_dir) -tags test -v -covermode=count -coverprofile=$(coverage_out)
 
 	grep -v 'data_generated.go\|schema_generated.go' $(coverage_out) > $(coverage_out)2
 	mv $(coverage_out)2 $(coverage_out)
 	sed -i 's/github.com\/snowplow\/dataflow-runner\/build/github.com\/snowplow\/dataflow-runner/g' $(coverage_out)
 
-	GO111MODULE=on go tool cover -html=$(coverage_out) -o $(coverage_html)
+	go tool cover -html=$(coverage_out) -o $(coverage_html)
 
 # -----------------------------------------------------------------------------
 #  CLEANUP
@@ -138,7 +138,7 @@ $(depend_log):
 
 	wget -N $(codegen_link) -O $(codegen)
 
-	GO111MODULE=on go run $(codegen) --schema $(cluster_avsc) --schema $(playbook_avsc) --out $(generated_schema)
-	GO111MODULE=on go run github.com/go-bindata/go-bindata/go-bindata -o $(generated_data) $(avro_dir)
+	go run $(codegen) --schema $(cluster_avsc) --schema $(playbook_avsc) --out $(generated_schema)
+	go run github.com/go-bindata/go-bindata/go-bindata -o $(generated_data) $(avro_dir)
 
 	@echo Dependencies generated at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(depend_log);
