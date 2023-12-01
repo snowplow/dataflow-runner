@@ -35,7 +35,7 @@ jobs:
 
     - name: Run Snyk to monitor vulnerabilities in Docker image
       uses: snyk/actions/docker@master
-      if: ${{ !contains(github.ref, 'rc') }}
+      if: ${{ contains(github.ref, 'rc') }}
       with:
         image: "snowplow/dataflow-runner:${{ github.ref_name }}"
         args: "--app-vulns --org=data-processing-new"
