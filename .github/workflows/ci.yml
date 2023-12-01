@@ -33,7 +33,23 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v2
 
+    - name: Extract project version from file
+      id: version
+      run: |
+          echo ::set-output name=VERSION::"$(cat VERSION)"
+
     - name: Run tests
       run: |
         export PATH="$PATH:/tmp/consul/"
         make test
+
+    - name: Publish docker image locally for Snyk action
+      run: make docker-build
+
+    - name: Snyk Setup
+      uses: snyk/actions/setup@master
+
+    - name: Run Snyk to check for vulnerabilities in Docker image
+      run: snyk container test snowplow/dataflow-runner:${{steps.version.outputs.VERSION}} --severity-threshold=high
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}

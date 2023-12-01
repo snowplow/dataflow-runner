@@ -30,22 +30,32 @@ jobs:
       id: get_version
       run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
 
-    - name: Create Release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-      with:
-        tag_name: ${{ steps.get_version.outputs.VERSION }}
-        release_name: Version ${{ steps.get_version.outputs.VERSION }}
-        draft: false
-        prerelease: false
+    - name: Publish docker image locally for Snyk action
+      run: make docker-build
 
-    - name: Upload release binaries
-      uses: alexellis/upload-assets@0.2.3
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
+    - name: Run Snyk to monitor vulnerabilities in Docker image
+      uses: snyk/actions/docker@master
+      if: ${{ !contains(github.ref, 'rc') }}
       with:
-        asset_paths: '["./build/bin/*.zip"]'
+        image: "snowplow/dataflow-runner:${{ github.ref_name }}"
+        args: "--app-vulns --org=data-processing-new"
+        command: monitor
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+    - name: Create GitHub release and attach artifacts
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        draft: true
+        prerelease: ${{ contains(github.ref , '-') }}
+        name: Version ${{ github.ref_name }}
+        tag_name: ${{ github.ref_name }}
+        files: |
+          build/bin/dataflow_runner_${{ github.ref_name }}_darwin_amd64.zip
+          build/bin/dataflow_runner_${{ github.ref_name }}_linux_amd64.zip
+          build/bin/dataflow_runner_${{ github.ref_name }}_windows_amd64.zip
 
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v2
