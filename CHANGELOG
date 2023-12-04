@@ -1,4 +1,4 @@
-Version 0.7.4 (2023-12-01)
+Version 0.7.4-rc2 (2023-12-01)
 --------------------------
 Bump alpine version to 3.18.5 (#91)
 Scan Docker images in Snyk Github action (#90)
