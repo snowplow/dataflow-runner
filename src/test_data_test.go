@@ -177,6 +177,87 @@ var ClusterRecordWithEBS = `{
   }
 }`
 
+var ClusterRecordWithGP3 = `{
+  "schema": "iglu:com.snowplowanalytics.dataflowrunner/ClusterConfig/avro/1-0-0",
+  "data": {
+    "name": "xxx",
+    "logUri": "s3://logging/",
+    "region": "us-east-1",
+    "credentials": {
+      "accessKeyId": "env",
+      "secretAccessKey": "env"
+    },
+    "roles": {
+      "jobflow": "EMR_EC2_DefaultRole",
+      "service": "EMR_DefaultRole"
+    },
+    "ec2": {
+      "amiVersion": "4.5.0",
+      "keyName": "snowplow-yyy-key",
+      "location": {
+        "classic": {
+          "availabilityZone": "us-east-1a"
+        },
+        "vpc": {
+          "subnetId": "subnet-123456"
+        }
+      },
+      "instances": {
+        "master": {
+          "type": "m1.medium",
+          "ebsConfiguration": {
+            "ebsOptimized": true,
+            "ebsBlockDeviceConfigs": [
+              {
+                "volumesPerInstance": 12,
+                "volumeSpecification": {
+                  "sizeInGB": 10,
+                  "volumeType": "gp3"
+                }
+              }
+            ]
+          }
+        },
+        "core": {
+          "type": "c3.4xlarge",
+          "count": 3,
+          "ebsConfiguration": {
+            "ebsOptimized": false,
+            "ebsBlockDeviceConfigs": [
+              {
+                "volumesPerInstance": 8,
+                "volumeSpecification": {
+                  "iops": 20,
+                  "sizeInGB": 4,
+                  "volumeType": "io1"
+                }
+              }
+            ]
+          }
+        },
+        "task": {
+          "type": "m1.medium",
+          "count": 1,
+          "bid": "0.015",
+          "ebsConfiguration": {
+            "ebsOptimized": false,
+            "ebsBlockDeviceConfigs": [
+              {
+                "volumesPerInstance": 4,
+                "volumeSpecification": {
+                  "iops": 100,
+                  "sizeInGB": 6,
+                  "volumeType": "standard"
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}`
+
 var ClusterRecordWithApps = `{
   "schema": "iglu:com.snowplowanalytics.dataflowrunner/ClusterConfig/avro/1-0-0",
   "data": {

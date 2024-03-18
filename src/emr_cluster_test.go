@@ -395,6 +395,75 @@ func TestGetInstanceGroups_WithEBS(t *testing.T) {
 	assert.Equal(expected[2], groups[2])
 }
 
+func TestGetInstanceGroups_WithGP3(t *testing.T) {
+	assert := assert.New(t)
+
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecordWithGP3), nil, "")
+	ec, _ := InitEmrCluster(*record)
+	groups := ec.GetInstanceGroups()
+	assert.Len(groups, 3)
+	expected := []*emr.InstanceGroupConfig{
+		{
+			InstanceCount: aws.Int64(1),
+			InstanceRole:  aws.String("MASTER"),
+			InstanceType:  aws.String("m1.medium"),
+			EbsConfiguration: &emr.EbsConfiguration{
+				EbsOptimized: aws.Bool(true),
+				EbsBlockDeviceConfigs: []*emr.EbsBlockDeviceConfig{
+					{
+						VolumesPerInstance: aws.Int64(12),
+						VolumeSpecification: &emr.VolumeSpecification{
+							SizeInGB:   aws.Int64(10),
+							VolumeType: aws.String("gp3"),
+						},
+					},
+				},
+			},
+		},
+		{
+			InstanceCount: aws.Int64(3),
+			InstanceRole:  aws.String("CORE"),
+			InstanceType:  aws.String("c3.4xlarge"),
+			EbsConfiguration: &emr.EbsConfiguration{
+				EbsOptimized: aws.Bool(false),
+				EbsBlockDeviceConfigs: []*emr.EbsBlockDeviceConfig{
+					{
+						VolumesPerInstance: aws.Int64(8),
+						VolumeSpecification: &emr.VolumeSpecification{
+							Iops:       aws.Int64(20),
+							SizeInGB:   aws.Int64(4),
+							VolumeType: aws.String("io1"),
+						},
+					},
+				},
+			},
+		},
+		{
+			InstanceCount: aws.Int64(1),
+			InstanceRole:  aws.String("TASK"),
+			InstanceType:  aws.String("m1.medium"),
+			BidPrice:      aws.String("0.015"),
+			Market:        aws.String("SPOT"),
+			EbsConfiguration: &emr.EbsConfiguration{
+				EbsOptimized: aws.Bool(false),
+				EbsBlockDeviceConfigs: []*emr.EbsBlockDeviceConfig{
+					{
+						VolumesPerInstance: aws.Int64(4),
+						VolumeSpecification: &emr.VolumeSpecification{
+							Iops:       aws.Int64(100),
+							SizeInGB:   aws.Int64(6),
+							VolumeType: aws.String("standard"),
+						},
+					},
+				},
+			},
+		},
+	}
+	assert.Equal(expected[0], groups[0])
+	assert.Equal(expected[1], groups[1])
+	assert.Equal(expected[2], groups[2])
+}
+
 func TestGetTags_NoTags(t *testing.T) {
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 	ec, _ := InitEmrCluster(*record)

@@ -310,7 +310,7 @@ func GetEbsConfiguration(c *EbsConfigurationRecord) *emr.EbsConfiguration {
 			emrVolumeSpec := &emr.VolumeSpecification{}
 			emrVolumeSpec.SizeInGB = aws.Int64(config.VolumeSpecification.SizeInGB)
 			emrVolumeSpec.VolumeType = aws.String(config.VolumeSpecification.VolumeType)
-			if *emrVolumeSpec.VolumeType != "gp2" {
+			if *emrVolumeSpec.VolumeType != "gp2" && *emrVolumeSpec.VolumeType != "gp3" {
 				emrVolumeSpec.Iops = aws.Int64(config.VolumeSpecification.Iops)
 			}
 
