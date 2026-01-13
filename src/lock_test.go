@@ -26,7 +26,7 @@ import (
 
 func makeClient(t *testing.T) (*api.Client, *testutil.TestServer) {
 	// Create server
-	server, err := testutil.NewTestServerT(t)
+	server, err := testutil.NewTestServerConfigT(t, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,8 @@ func TestConsulLock(t *testing.T) {
 	assert.Nil(cl)
 	assert.Equal("Unknown protocol scheme: some", err.Error())
 
-	cl, err = InitConsulLock(s.HTTPAddr, lockName)
+	httpAddr := "http://" + s.HTTPAddr
+	cl, err = InitConsulLock(httpAddr, lockName)
 	assert.Nil(err)
 	assert.NotNil(cl)
 
@@ -80,7 +81,7 @@ func TestConsulLock(t *testing.T) {
 	assert.Equal("lock not held", err.Error())
 
 	// fail for malformed key
-	cl, err = InitConsulLock(s.HTTPAddr, "/"+lockName)
+	cl, err = InitConsulLock(httpAddr, "/"+lockName)
 	assert.Nil(err)
 	assert.NotNil(cl)
 
@@ -144,7 +145,8 @@ func TestGetLock(t *testing.T) {
 	assert.Equal(lock, &FileLock{path: lockName})
 
 	// ConsulLock if consul != ""
-	lock, err = GetLock(lockName, s.HTTPAddr)
+	httpAddr := "http://" + s.HTTPAddr
+	lock, err = GetLock(lockName, httpAddr)
 	assert.NotNil(lock)
 	assert.Nil(err)
 	cl, ok := lock.(*ConsulLock)

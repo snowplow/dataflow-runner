@@ -15,11 +15,11 @@ package main
 
 import (
 	"errors"
+	"io/ioutil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
-
-	"io/ioutil"
 
 	"github.com/hashicorp/consul/api"
 )
@@ -73,7 +73,26 @@ type ConsulLock struct {
 
 // InitConsulLock builds a ConsulLock (a KV pair in Consul) with the name argument as key
 func InitConsulLock(consulAddress, name string) (Lock, error) {
-	client, err := api.NewClient(&api.Config{Address: consulAddress})
+	config := api.DefaultConfig()
+
+	// Parse the address to extract scheme if present
+	parsedURL, err := url.Parse(consulAddress)
+	if err != nil {
+		return nil, err
+	}
+
+	if parsedURL.Scheme != "" && parsedURL.Host != "" {
+		// Validate scheme - only http and https are supported
+		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+			return nil, errors.New("Unknown protocol scheme: " + parsedURL.Scheme)
+		}
+		config.Scheme = parsedURL.Scheme
+		config.Address = parsedURL.Host
+	} else {
+		config.Address = consulAddress
+	}
+
+	client, err := api.NewClient(config)
 	if err != nil {
 		return nil, err
 	}

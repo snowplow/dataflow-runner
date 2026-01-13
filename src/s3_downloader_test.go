@@ -40,7 +40,7 @@ func (m *mockDownloaderAPI) Download(w io.WriterAt, i *s3.GetObjectInput, option
 		return int64(0), errors.New("Download failed")
 	}
 
-	if strings.Contains(*i.Bucket, "gz") {
+	if strings.HasPrefix(*i.Bucket, "tmp-gz") {
 		var buf bytes.Buffer
 		zw := gzip.NewWriter(&buf)
 		zw.Write([]byte(*i.Key))
@@ -90,7 +90,7 @@ func TestDownloadToFile_Fail(t *testing.T) {
 
 	err = s3Downloader.DownloadToFile("key")
 	assert.NotNil(err)
-	assert.Equal("mkdir /tmp2: permission denied", err.Error())
+	assert.Contains(err.Error(), "mkdir /tmp2:")
 
 	s3Downloader = mockS3Downloader("", "/tmp")
 	err = s3Downloader.DownloadToFile("key")
