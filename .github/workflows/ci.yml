@@ -12,7 +12,7 @@ jobs:
     name: Compile & Test
     strategy:
       matrix:
-        go-version: [1.19.2]
+        go-version: [1.24.11]
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
 
@@ -26,8 +26,8 @@ jobs:
       run: |
         mkdir /tmp/consul
         cd /tmp/consul
-        wget https://releases.hashicorp.com/consul/1.8.3/consul_1.8.3_linux_amd64.zip
-        unzip consul_1.8.3_linux_amd64.zip
+        wget https://releases.hashicorp.com/consul/1.22.2/consul_1.22.2_linux_amd64.zip
+        unzip consul_1.22.2_linux_amd64.zip
         chmod +x consul
 
     - name: Checkout code

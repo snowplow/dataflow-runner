@@ -142,8 +142,8 @@ func TestDownloadLogFiles(t *testing.T) {
 	prefix := "prefix"
 	stepID := "step-id"
 
-	tmpDirInput, _ := ioutil.TempDir("", "input")
-	tmpDirOutput, _ := ioutil.TempDir("", "output")
+	tmpDirInput, _ := ioutil.TempDir("", "testinput")
+	tmpDirOutput, _ := ioutil.TempDir("", "testoutput")
 	filepathInput := filepath.Join(tmpDirInput, prefix, jobflowID, "steps", stepID)
 	filename := "key.txt"
 
