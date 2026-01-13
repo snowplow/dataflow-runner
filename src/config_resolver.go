@@ -28,10 +28,6 @@ import (
 	"github.com/elodina/go-avro"
 )
 
-const (
-	clusterSchemaPath  = "avro/cluster.avsc"
-	playbookSchemaPath = "avro/playbook.avsc"
-)
 
 var (
 	templFuncs = template.FuncMap{
@@ -86,24 +82,12 @@ type ConfigResolver struct {
 
 // InitConfigResolver creates a new ConfigResolver instance
 func InitConfigResolver() (*ConfigResolver, error) {
-	var err error
-
-	// Load Schemas from bindata
-	clusterSchemaRaw, err := Asset(clusterSchemaPath)
+	// Parse and store schemas from embedded data
+	clusterSchema, err := avro.ParseSchema(string(embeddedClusterSchema))
 	if err != nil {
 		return nil, err
 	}
-	playbookSchemaRaw, err := Asset(playbookSchemaPath)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse and store schemas
-	clusterSchema, err := avro.ParseSchema(string(clusterSchemaRaw))
-	if err != nil {
-		return nil, err
-	}
-	playbookSchema, err := avro.ParseSchema(string(playbookSchemaRaw))
+	playbookSchema, err := avro.ParseSchema(string(embeddedPlaybookSchema))
 	if err != nil {
 		return nil, err
 	}

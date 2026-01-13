@@ -28,7 +28,6 @@ coverage_html = $(coverage_dir)/coverage.html
 
 generated_dir    = $(build_dir)/generated
 generated_schema = $(generated_dir)/schema_generated.go
-generated_data   = $(generated_dir)/data_generated.go
 
 merge_src_dir = $(build_dir)/src
 output_dir    = $(build_dir)/bin
@@ -45,8 +44,6 @@ bin_windows   = $(windows_dir)/$(bin_name)
 
 container_name = snowplow/$(bin_name)
 
-gox           = "github.com/mitchellh/gox"
-
 # -----------------------------------------------------------------------------
 #  BUILDING
 # -----------------------------------------------------------------------------
@@ -61,6 +58,7 @@ $(merge_log): $(depend_log)
 	cp $(shell find $(generated_dir) -maxdepth 5 -name "*.go") $(merge_src_dir)
 	cp $(filter-out $(go_test_files), $(shell find $(src_dir) -maxdepth 5 -name "*.go")) $(merge_src_dir)
 	cp $(shell find $(src_dir) -maxdepth 5 -name "*_test.go") $(merge_src_dir)
+	cp -r $(avro_dir) $(merge_src_dir)/
 
 	go get -t ./$(merge_src_dir)
 
@@ -70,16 +68,15 @@ $(build_log): cli-linux cli-darwin cli-windows
 	@echo Build success at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(build_log);
 
 cli-linux: $(merge_log)
-	CGO_ENABLED=0 go run $(gox) -osarch=linux/amd64 -output=$(bin_linux) ./$(merge_src_dir)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o $(bin_linux) ./$(merge_src_dir)
 	zip -rj $(output_dir)/dataflow_runner_$(version)_linux_amd64.zip $(bin_linux)
 
 cli-darwin: $(merge_log)
-	CGO_ENABLED=0 go run $(gox) -osarch=darwin/amd64 -output=$(bin_darwin) ./$(merge_src_dir)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o $(bin_darwin) ./$(merge_src_dir)
 	zip -rj $(output_dir)/dataflow_runner_$(version)_darwin_amd64.zip $(bin_darwin)
 
 cli-windows: $(merge_log)
-	go get github.com/konsorten/go-windows-terminal-sequences || true
-	CGO_ENABLED=0 go run $(gox) -osarch=windows/amd64 -output=$(bin_windows) ./$(merge_src_dir)
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o $(bin_windows).exe ./$(merge_src_dir)
 	zip -rj $(output_dir)/dataflow_runner_$(version)_windows_amd64.zip $(bin_windows).exe
 
 docker-build: cli-linux
@@ -115,7 +112,7 @@ test: $(merge_log)
 
 	grep -v 'data_generated.go\|schema_generated.go' $(coverage_out) > $(coverage_out)2
 	mv $(coverage_out)2 $(coverage_out)
-	sed -i 's/github.com\/snowplow\/dataflow-runner\/build/github.com\/snowplow\/dataflow-runner/g' $(coverage_out)
+	sed 's/github.com\/snowplow\/dataflow-runner\/build/github.com\/snowplow\/dataflow-runner/g' $(coverage_out) > $(coverage_out).tmp && mv $(coverage_out).tmp $(coverage_out)
 
 	go tool cover -html=$(coverage_out) -o $(coverage_html)
 
@@ -139,6 +136,5 @@ $(depend_log):
 	wget -N $(codegen_link) -O $(codegen)
 
 	go run $(codegen) --schema $(cluster_avsc) --schema $(playbook_avsc) --out $(generated_schema)
-	go run github.com/go-bindata/go-bindata/go-bindata -o $(generated_data) $(avro_dir)
 
 	@echo Dependencies generated at: `/bin/date "+%Y-%m-%d---%H-%M-%S"` >> $(depend_log);
