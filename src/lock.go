@@ -15,7 +15,6 @@ package main
 
 import (
 	"errors"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -56,7 +55,7 @@ func (fl FileLock) TryLock() error {
 	}
 
 	pid := os.Getppid()
-	err := ioutil.WriteFile(fl.path, []byte(strconv.Itoa(pid)+"\n"), 0666)
+	err := os.WriteFile(fl.path, []byte(strconv.Itoa(pid)+"\n"), 0666)
 	return err
 }
 

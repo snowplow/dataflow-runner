@@ -14,35 +14,31 @@
 package main
 
 import (
-	"errors"
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/s3/s3manager/s3manageriface"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // S3Downloader models an entity capable of downloading files from S3 at the specified bucket
 // to the specified dir
 type S3Downloader struct {
-	Downloader  s3manageriface.DownloaderAPI
+	Downloader  S3DownloaderAPI
 	Bucket, Dir string
-}
-
-// EachPage is the function to trigger on each page of s3.ListObjectsPages
-func (d *S3Downloader) EachPage(page *s3.ListObjectsOutput, more bool) bool {
-	for _, obj := range page.Contents {
-		d.DownloadToFile(*obj.Key)
-	}
-
-	return true
 }
 
 // DownloadToFile downloads the file located at key in S3 to a local file
 func (d *S3Downloader) DownloadToFile(key string) error {
+	return d.DownloadToFileWithContext(context.Background(), key)
+}
+
+// DownloadToFileWithContext downloads the file with context support
+func (d *S3Downloader) DownloadToFileWithContext(ctx context.Context, key string) error {
 	if key == "" {
-		return errors.New("Key parameter cannot be empty")
+		return fmt.Errorf("Key parameter cannot be empty")
 	}
 
 	// Create the directories in the path
@@ -60,6 +56,6 @@ func (d *S3Downloader) DownloadToFile(key string) error {
 
 	// Download the file using the AWS SDK
 	params := &s3.GetObjectInput{Bucket: aws.String(d.Bucket), Key: aws.String(key)}
-	_, err = d.Downloader.Download(fd, params)
+	_, err = d.Downloader.Download(ctx, fd, params)
 	return err
 }

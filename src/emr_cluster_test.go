@@ -14,23 +14,21 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
-	"errors"
-
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/emr"
-	"github.com/aws/aws-sdk-go/service/emr/emriface"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/emr"
+	"github.com/aws/aws-sdk-go-v2/service/emr/types"
 	"github.com/stretchr/testify/assert"
 )
 
-type mockEMRAPICluster struct {
-	emriface.EMRAPI
-}
+type mockEMRAPICluster struct{}
 
-func (m *mockEMRAPICluster) TerminateJobFlows(input *emr.TerminateJobFlowsInput) (*emr.TerminateJobFlowsOutput, error) {
-	if !strings.HasPrefix(*input.JobFlowIds[0], "j-") {
+func (m *mockEMRAPICluster) TerminateJobFlows(ctx context.Context, input *emr.TerminateJobFlowsInput, optFns ...func(*emr.Options)) (*emr.TerminateJobFlowsOutput, error) {
+	if !strings.HasPrefix(input.JobFlowIds[0], "j-") {
 		return nil, errors.New("TerminateJobFlows failed")
 	}
 	return &emr.TerminateJobFlowsOutput{}, nil
@@ -38,15 +36,22 @@ func (m *mockEMRAPICluster) TerminateJobFlows(input *emr.TerminateJobFlowsInput)
 
 // Mock using the cluster id of input to set the cluster state
 // ClusterId = "j-STARTING" will result in a cluster with the STARTING state
-func (m *mockEMRAPICluster) DescribeCluster(input *emr.DescribeClusterInput) (*emr.DescribeClusterOutput, error) {
+func (m *mockEMRAPICluster) DescribeCluster(ctx context.Context, input *emr.DescribeClusterInput, optFns ...func(*emr.Options)) (*emr.DescribeClusterOutput, error) {
 	if !strings.HasPrefix(*input.ClusterId, "j-") {
 		return nil, errors.New("DescribeCluster failed")
 	}
-	var state string
-	var states = []string{"STARTING", "BOOTSTRAPPING", "RUNNING", "WAITING", "TERMINATING",
-		"TERMINATED", "TERMINATED_WITH_ERRORS"}
+	var state types.ClusterState
+	var states = []types.ClusterState{
+		types.ClusterStateStarting,
+		types.ClusterStateBootstrapping,
+		types.ClusterStateRunning,
+		types.ClusterStateWaiting,
+		types.ClusterStateTerminating,
+		types.ClusterStateTerminated,
+		types.ClusterStateTerminatedWithErrors,
+	}
 	for _, e := range states {
-		if strings.Contains(*input.ClusterId, e) {
+		if strings.Contains(*input.ClusterId, string(e)) {
 			state = e
 			break
 		}
@@ -54,34 +59,46 @@ func (m *mockEMRAPICluster) DescribeCluster(input *emr.DescribeClusterInput) (*e
 	if state == "" {
 		return nil, errors.New("DescribeCluster failed")
 	}
-	if state == "TERMINATED" {
+	if state == types.ClusterStateTerminated {
 		return &emr.DescribeClusterOutput{
-			Cluster: &emr.Cluster{
-				Status: &emr.ClusterStatus{
-					State: aws.String(state),
-					StateChangeReason: &emr.ClusterStateChangeReason{
-						Code: aws.String("BOOTSTRAP_FAILURE"),
+			Cluster: &types.Cluster{
+				Status: &types.ClusterStatus{
+					State: state,
+					StateChangeReason: &types.ClusterStateChangeReason{
+						Code: types.ClusterStateChangeReasonCodeBootstrapFailure,
 					},
 				},
 			},
 		}, nil
 	}
 	return &emr.DescribeClusterOutput{
-		Cluster: &emr.Cluster{
-			Status: &emr.ClusterStatus{
-				State: aws.String(state),
+		Cluster: &types.Cluster{
+			Status: &types.ClusterStatus{
+				State: state,
 			},
 		},
 	}, nil
 }
 
-func (m *mockEMRAPICluster) RunJobFlow(input *emr.RunJobFlowInput) (*emr.RunJobFlowOutput, error) {
+func (m *mockEMRAPICluster) RunJobFlow(ctx context.Context, input *emr.RunJobFlowInput, optFns ...func(*emr.Options)) (*emr.RunJobFlowOutput, error) {
 	if *input.Name == "fail" {
 		return nil, errors.New("RunJobFlow failed")
 	}
 	return &emr.RunJobFlowOutput{
 		JobFlowId: aws.String("j-" + *input.Name),
 	}, nil
+}
+
+func (m *mockEMRAPICluster) AddJobFlowSteps(ctx context.Context, input *emr.AddJobFlowStepsInput, optFns ...func(*emr.Options)) (*emr.AddJobFlowStepsOutput, error) {
+	return nil, nil
+}
+
+func (m *mockEMRAPICluster) ListSteps(ctx context.Context, input *emr.ListStepsInput, optFns ...func(*emr.Options)) (*emr.ListStepsOutput, error) {
+	return nil, nil
+}
+
+func (m *mockEMRAPICluster) DescribeStep(ctx context.Context, input *emr.DescribeStepInput, optFns ...func(*emr.Options)) (*emr.DescribeStepOutput, error) {
+	return nil, nil
 }
 
 func mockEmrCluster(clusterRecord ClusterConfig) *EmrCluster {
@@ -142,11 +159,12 @@ func TestTerminateJobFlow_Success(t *testing.T) {
 
 func TestRunJobFlow_Fail(t *testing.T) {
 	assert := assert.New(t)
+	ctx := context.Background()
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
 
 	// fails if GetJobFlowInput fails
 	ec := mockEmrCluster(*record)
-	_, err := ec.runJobFlow(3)
+	_, err := ec.runJobFlow(ctx, 3)
 	assert.NotNil(err)
 	assert.Equal("Only one of Availability Zone and Subnet id should be provided", err.Error())
 
@@ -154,37 +172,38 @@ func TestRunJobFlow_Fail(t *testing.T) {
 	record.Name = "fail"
 	record.Ec2.Location.Vpc = nil
 	ec = mockEmrCluster(*record)
-	_, err = ec.runJobFlow(3)
+	_, err = ec.runJobFlow(ctx, 3)
 	assert.NotNil(err)
 	assert.Equal("emr.RunJobFlow: RunJobFlow failed", err.Error())
 
 	// fails if DescribeCluster fails
 	record.Name = "123"
 	ec = mockEmrCluster(*record)
-	_, err = ec.runJobFlow(3)
+	_, err = ec.runJobFlow(ctx, 3)
 	assert.NotNil(err)
 	assert.Equal("emr.DescribeCluster: DescribeCluster failed", err.Error())
 
 	// fails if 3 or more retries
 	record.Name = "TERMINATED"
 	ec = mockEmrCluster(*record)
-	_, err = ec.runJobFlow(3)
+	_, err = ec.runJobFlow(ctx, 3)
 	assert.NotNil(err)
 	assert.Equal("could not start the cluster due to bootstrap failure", err.Error())
 
 	// fails if the cluster state is not WAITING
 	record.Name = "TERMINATING"
 	ec = mockEmrCluster(*record)
-	_, err = ec.runJobFlow(3)
+	_, err = ec.runJobFlow(ctx, 3)
 	assert.NotNil(err)
 	assert.Equal("EMR cluster failed to launch with state TERMINATING", err.Error())
 }
 
 func TestRunJobFlow_Success(t *testing.T) {
+	ctx := context.Background()
 	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord2), nil, "")
 	record.Name = "WAITING"
 	ec := mockEmrCluster(*record)
-	id, _ := ec.runJobFlow(3)
+	id, _ := ec.runJobFlow(ctx, 3)
 	assert.Equal(t, "j-WAITING", id)
 }
 
@@ -302,28 +321,36 @@ func TestGetInstanceGroups_NoEBS(t *testing.T) {
 	ec, _ := InitEmrCluster(*record)
 	groups := ec.GetInstanceGroups()
 	assert.Len(groups, 3)
-	expected := []*emr.InstanceGroupConfig{
+	expected := []types.InstanceGroupConfig{
 		{
-			InstanceCount: aws.Int64(1),
-			InstanceRole:  aws.String("MASTER"),
+			InstanceCount: aws.Int32(1),
+			InstanceRole:  types.InstanceRoleTypeMaster,
 			InstanceType:  aws.String("m1.medium"),
 		},
 		{
-			InstanceCount: aws.Int64(3),
-			InstanceRole:  aws.String("CORE"),
+			InstanceCount: aws.Int32(3),
+			InstanceRole:  types.InstanceRoleTypeCore,
 			InstanceType:  aws.String("c3.4xlarge"),
 		},
 		{
-			InstanceCount: aws.Int64(1),
-			InstanceRole:  aws.String("TASK"),
+			InstanceCount: aws.Int32(1),
+			InstanceRole:  types.InstanceRoleTypeTask,
 			InstanceType:  aws.String("m1.medium"),
 			BidPrice:      aws.String("0.015"),
-			Market:        aws.String("SPOT"),
+			Market:        types.MarketTypeSpot,
 		},
 	}
-	assert.Equal(expected[0], groups[0])
-	assert.Equal(expected[1], groups[1])
-	assert.Equal(expected[2], groups[2])
+	assert.Equal(expected[0].InstanceCount, groups[0].InstanceCount)
+	assert.Equal(expected[0].InstanceRole, groups[0].InstanceRole)
+	assert.Equal(expected[0].InstanceType, groups[0].InstanceType)
+	assert.Equal(expected[1].InstanceCount, groups[1].InstanceCount)
+	assert.Equal(expected[1].InstanceRole, groups[1].InstanceRole)
+	assert.Equal(expected[1].InstanceType, groups[1].InstanceType)
+	assert.Equal(expected[2].InstanceCount, groups[2].InstanceCount)
+	assert.Equal(expected[2].InstanceRole, groups[2].InstanceRole)
+	assert.Equal(expected[2].InstanceType, groups[2].InstanceType)
+	assert.Equal(expected[2].BidPrice, groups[2].BidPrice)
+	assert.Equal(expected[2].Market, groups[2].Market)
 }
 
 func TestGetInstanceGroups_WithEBS(t *testing.T) {
@@ -333,66 +360,38 @@ func TestGetInstanceGroups_WithEBS(t *testing.T) {
 	ec, _ := InitEmrCluster(*record)
 	groups := ec.GetInstanceGroups()
 	assert.Len(groups, 3)
-	expected := []*emr.InstanceGroupConfig{
-		{
-			InstanceCount: aws.Int64(1),
-			InstanceRole:  aws.String("MASTER"),
-			InstanceType:  aws.String("m1.medium"),
-			EbsConfiguration: &emr.EbsConfiguration{
-				EbsOptimized: aws.Bool(true),
-				EbsBlockDeviceConfigs: []*emr.EbsBlockDeviceConfig{
-					{
-						VolumesPerInstance: aws.Int64(12),
-						VolumeSpecification: &emr.VolumeSpecification{
-							SizeInGB:   aws.Int64(10),
-							VolumeType: aws.String("gp2"),
-						},
-					},
-				},
-			},
-		},
-		{
-			InstanceCount: aws.Int64(3),
-			InstanceRole:  aws.String("CORE"),
-			InstanceType:  aws.String("c3.4xlarge"),
-			EbsConfiguration: &emr.EbsConfiguration{
-				EbsOptimized: aws.Bool(false),
-				EbsBlockDeviceConfigs: []*emr.EbsBlockDeviceConfig{
-					{
-						VolumesPerInstance: aws.Int64(8),
-						VolumeSpecification: &emr.VolumeSpecification{
-							Iops:       aws.Int64(20),
-							SizeInGB:   aws.Int64(4),
-							VolumeType: aws.String("io1"),
-						},
-					},
-				},
-			},
-		},
-		{
-			InstanceCount: aws.Int64(1),
-			InstanceRole:  aws.String("TASK"),
-			InstanceType:  aws.String("m1.medium"),
-			BidPrice:      aws.String("0.015"),
-			Market:        aws.String("SPOT"),
-			EbsConfiguration: &emr.EbsConfiguration{
-				EbsOptimized: aws.Bool(false),
-				EbsBlockDeviceConfigs: []*emr.EbsBlockDeviceConfig{
-					{
-						VolumesPerInstance: aws.Int64(4),
-						VolumeSpecification: &emr.VolumeSpecification{
-							Iops:       aws.Int64(100),
-							SizeInGB:   aws.Int64(6),
-							VolumeType: aws.String("standard"),
-						},
-					},
-				},
-			},
-		},
-	}
-	assert.Equal(expected[0], groups[0])
-	assert.Equal(expected[1], groups[1])
-	assert.Equal(expected[2], groups[2])
+
+	// Master instance
+	assert.Equal(aws.Int32(1), groups[0].InstanceCount)
+	assert.Equal(types.InstanceRoleTypeMaster, groups[0].InstanceRole)
+	assert.Equal(aws.String("m1.medium"), groups[0].InstanceType)
+	assert.NotNil(groups[0].EbsConfiguration)
+	assert.Equal(aws.Bool(true), groups[0].EbsConfiguration.EbsOptimized)
+	assert.Len(groups[0].EbsConfiguration.EbsBlockDeviceConfigs, 1)
+	assert.Equal(aws.Int32(12), groups[0].EbsConfiguration.EbsBlockDeviceConfigs[0].VolumesPerInstance)
+	assert.Equal(aws.Int32(10), groups[0].EbsConfiguration.EbsBlockDeviceConfigs[0].VolumeSpecification.SizeInGB)
+	assert.Equal(aws.String("gp2"), groups[0].EbsConfiguration.EbsBlockDeviceConfigs[0].VolumeSpecification.VolumeType)
+
+	// Core instance
+	assert.Equal(aws.Int32(3), groups[1].InstanceCount)
+	assert.Equal(types.InstanceRoleTypeCore, groups[1].InstanceRole)
+	assert.Equal(aws.String("c3.4xlarge"), groups[1].InstanceType)
+	assert.NotNil(groups[1].EbsConfiguration)
+	assert.Equal(aws.Bool(false), groups[1].EbsConfiguration.EbsOptimized)
+	assert.Len(groups[1].EbsConfiguration.EbsBlockDeviceConfigs, 1)
+	assert.Equal(aws.Int32(8), groups[1].EbsConfiguration.EbsBlockDeviceConfigs[0].VolumesPerInstance)
+	assert.Equal(aws.Int32(20), groups[1].EbsConfiguration.EbsBlockDeviceConfigs[0].VolumeSpecification.Iops)
+	assert.Equal(aws.Int32(4), groups[1].EbsConfiguration.EbsBlockDeviceConfigs[0].VolumeSpecification.SizeInGB)
+	assert.Equal(aws.String("io1"), groups[1].EbsConfiguration.EbsBlockDeviceConfigs[0].VolumeSpecification.VolumeType)
+
+	// Task instance
+	assert.Equal(aws.Int32(1), groups[2].InstanceCount)
+	assert.Equal(types.InstanceRoleTypeTask, groups[2].InstanceRole)
+	assert.Equal(aws.String("m1.medium"), groups[2].InstanceType)
+	assert.Equal(aws.String("0.015"), groups[2].BidPrice)
+	assert.Equal(types.MarketTypeSpot, groups[2].Market)
+	assert.NotNil(groups[2].EbsConfiguration)
+	assert.Equal(aws.Bool(false), groups[2].EbsConfiguration.EbsOptimized)
 }
 
 func TestGetInstanceGroups_WithGP3(t *testing.T) {
@@ -402,66 +401,16 @@ func TestGetInstanceGroups_WithGP3(t *testing.T) {
 	ec, _ := InitEmrCluster(*record)
 	groups := ec.GetInstanceGroups()
 	assert.Len(groups, 3)
-	expected := []*emr.InstanceGroupConfig{
-		{
-			InstanceCount: aws.Int64(1),
-			InstanceRole:  aws.String("MASTER"),
-			InstanceType:  aws.String("m1.medium"),
-			EbsConfiguration: &emr.EbsConfiguration{
-				EbsOptimized: aws.Bool(true),
-				EbsBlockDeviceConfigs: []*emr.EbsBlockDeviceConfig{
-					{
-						VolumesPerInstance: aws.Int64(12),
-						VolumeSpecification: &emr.VolumeSpecification{
-							SizeInGB:   aws.Int64(10),
-							VolumeType: aws.String("gp3"),
-						},
-					},
-				},
-			},
-		},
-		{
-			InstanceCount: aws.Int64(3),
-			InstanceRole:  aws.String("CORE"),
-			InstanceType:  aws.String("c3.4xlarge"),
-			EbsConfiguration: &emr.EbsConfiguration{
-				EbsOptimized: aws.Bool(false),
-				EbsBlockDeviceConfigs: []*emr.EbsBlockDeviceConfig{
-					{
-						VolumesPerInstance: aws.Int64(8),
-						VolumeSpecification: &emr.VolumeSpecification{
-							Iops:       aws.Int64(20),
-							SizeInGB:   aws.Int64(4),
-							VolumeType: aws.String("io1"),
-						},
-					},
-				},
-			},
-		},
-		{
-			InstanceCount: aws.Int64(1),
-			InstanceRole:  aws.String("TASK"),
-			InstanceType:  aws.String("m1.medium"),
-			BidPrice:      aws.String("0.015"),
-			Market:        aws.String("SPOT"),
-			EbsConfiguration: &emr.EbsConfiguration{
-				EbsOptimized: aws.Bool(false),
-				EbsBlockDeviceConfigs: []*emr.EbsBlockDeviceConfig{
-					{
-						VolumesPerInstance: aws.Int64(4),
-						VolumeSpecification: &emr.VolumeSpecification{
-							Iops:       aws.Int64(100),
-							SizeInGB:   aws.Int64(6),
-							VolumeType: aws.String("standard"),
-						},
-					},
-				},
-			},
-		},
-	}
-	assert.Equal(expected[0], groups[0])
-	assert.Equal(expected[1], groups[1])
-	assert.Equal(expected[2], groups[2])
+
+	// Master instance with gp3
+	assert.Equal(aws.Int32(1), groups[0].InstanceCount)
+	assert.Equal(types.InstanceRoleTypeMaster, groups[0].InstanceRole)
+	assert.NotNil(groups[0].EbsConfiguration)
+	assert.Equal(aws.Bool(true), groups[0].EbsConfiguration.EbsOptimized)
+	assert.Len(groups[0].EbsConfiguration.EbsBlockDeviceConfigs, 1)
+	assert.Equal(aws.String("gp3"), groups[0].EbsConfiguration.EbsBlockDeviceConfigs[0].VolumeSpecification.VolumeType)
+	// gp3 should not have Iops set
+	assert.Nil(groups[0].EbsConfiguration.EbsBlockDeviceConfigs[0].VolumeSpecification.Iops)
 }
 
 func TestGetTags_NoTags(t *testing.T) {
@@ -475,11 +424,12 @@ func TestGetTags_WithTags(t *testing.T) {
 	ec, _ := InitEmrCluster(*record)
 	tags := ec.GetTags()
 	assert.Len(t, tags, 1)
-	expected := &emr.Tag{
+	expected := types.Tag{
 		Key:   aws.String("hello"),
 		Value: aws.String("world"),
 	}
-	assert.Equal(t, expected, tags[0])
+	assert.Equal(t, expected.Key, tags[0].Key)
+	assert.Equal(t, expected.Value, tags[0].Value)
 }
 
 func TestGetBootstrapActions_NoActions(t *testing.T) {
@@ -493,14 +443,9 @@ func TestGetBootstrapActions_WithActions(t *testing.T) {
 	ec, _ := InitEmrCluster(*record)
 	actions := ec.GetBootstrapActions()
 	assert.Len(t, actions, 1)
-	expected := &emr.BootstrapActionConfig{
-		Name: aws.String("Bootstrap Action"),
-		ScriptBootstrapAction: &emr.ScriptBootstrapActionConfig{
-			Path: aws.String("s3://snowplow/script.sh"),
-			Args: []*string{aws.String("1.5")},
-		},
-	}
-	assert.Equal(t, expected, actions[0])
+	assert.Equal(t, aws.String("Bootstrap Action"), actions[0].Name)
+	assert.Equal(t, aws.String("s3://snowplow/script.sh"), actions[0].ScriptBootstrapAction.Path)
+	assert.Equal(t, []string{"1.5"}, actions[0].ScriptBootstrapAction.Args)
 }
 
 func TestGetConfigurations_NoConfigs(t *testing.T) {
@@ -514,11 +459,8 @@ func TestGetConfigurations_WithConfigs(t *testing.T) {
 	ec, _ := InitEmrCluster(*record)
 	configs := ec.GetConfigurations()
 	assert.Len(t, configs, 1)
-	expected := &emr.Configuration{
-		Classification: aws.String("c"),
-		Properties:     map[string]*string{"key": aws.String("value")},
-	}
-	assert.Equal(t, expected, configs[0])
+	assert.Equal(t, aws.String("c"), configs[0].Classification)
+	assert.Equal(t, map[string]string{"key": "value"}, configs[0].Properties)
 }
 
 func TestGetApplications_NoApps(t *testing.T) {

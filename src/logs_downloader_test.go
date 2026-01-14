@@ -14,72 +14,92 @@
 package main
 
 import (
+	"context"
 	"errors"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/emr"
-	"github.com/aws/aws-sdk-go/service/emr/emriface"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/s3/s3iface"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/emr"
+	"github.com/aws/aws-sdk-go-v2/service/emr/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/assert"
 )
 
-type mockS3API struct {
-	s3iface.S3API
-}
+type mockS3APILogs struct{}
 
-func (m *mockS3API) ListObjectsPages(input *s3.ListObjectsInput, fn func(*s3.ListObjectsOutput, bool) bool) error {
+func (m *mockS3APILogs) ListObjectsV2(ctx context.Context, input *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	if strings.Contains(*input.Bucket, "error") {
-		return errors.New("ListObjectsPages failed")
+		return nil, errors.New("ListObjectsV2 failed")
 	}
 
-	files, _ := ioutil.ReadDir(filepath.Join(*input.Bucket, *input.Prefix))
-	contents := make([]*s3.Object, len(files))
+	files, _ := os.ReadDir(filepath.Join(*input.Bucket, *input.Prefix))
+	contents := make([]s3types.Object, len(files))
 	sanitizedPrefix := filepath.Join(strings.Split(*input.Prefix, "/")...)
 	for i, file := range files {
-		contents[i] = &s3.Object{Key: aws.String(filepath.Join(sanitizedPrefix, file.Name()))}
+		contents[i] = s3types.Object{Key: aws.String(filepath.Join(sanitizedPrefix, file.Name()))}
 	}
-	fn(&s3.ListObjectsOutput{Contents: contents}, true)
-	return nil
+	isTruncated := false
+	return &s3.ListObjectsV2Output{Contents: contents, IsTruncated: &isTruncated}, nil
 }
 
-type mockEMRAPILogs struct {
-	emriface.EMRAPI
+func (m *mockS3APILogs) GetObject(ctx context.Context, input *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	return nil, nil
 }
 
-func (m *mockEMRAPILogs) DescribeCluster(input *emr.DescribeClusterInput) (*emr.DescribeClusterOutput, error) {
+type mockEMRAPILogs struct{}
+
+func (m *mockEMRAPILogs) DescribeCluster(ctx context.Context, input *emr.DescribeClusterInput, optFns ...func(*emr.Options)) (*emr.DescribeClusterOutput, error) {
 	if *input.ClusterId == "test-get-bucket" {
-		return &emr.DescribeClusterOutput{Cluster: &emr.Cluster{LogUri: aws.String("s3://bucket/log")}},
+		return &emr.DescribeClusterOutput{Cluster: &types.Cluster{LogUri: aws.String("s3://bucket/log")}},
 			nil
 	}
 	if *input.ClusterId == "test-get-bucket-fail" {
-		return &emr.DescribeClusterOutput{Cluster: &emr.Cluster{LogUri: aws.String("://")}}, nil
+		return &emr.DescribeClusterOutput{Cluster: &types.Cluster{LogUri: aws.String("://")}}, nil
 	}
 	if *input.ClusterId == "test-get-bucket-empty-log-uri" {
-		return &emr.DescribeClusterOutput{Cluster: &emr.Cluster{LogUri: aws.String("")}}, nil
+		return &emr.DescribeClusterOutput{Cluster: &types.Cluster{LogUri: aws.String("")}}, nil
 	}
 	if *input.ClusterId == "test-get-step-logs" {
-		return &emr.DescribeClusterOutput{Cluster: &emr.Cluster{LogUri: aws.String("s3://tmp-gz/log")}},
+		return &emr.DescribeClusterOutput{Cluster: &types.Cluster{LogUri: aws.String("s3://tmp-gz/log")}},
 			nil
 	}
 	if *input.ClusterId == "test-get-step-logs-fail" {
 		return &emr.DescribeClusterOutput{
-			Cluster: &emr.Cluster{LogUri: aws.String("s3://tmp-error/log")},
+			Cluster: &types.Cluster{LogUri: aws.String("s3://tmp-error/log")},
 		}, nil
 	}
 	return nil, errors.New("DescribeCluster failed")
+}
+
+func (m *mockEMRAPILogs) RunJobFlow(ctx context.Context, input *emr.RunJobFlowInput, optFns ...func(*emr.Options)) (*emr.RunJobFlowOutput, error) {
+	return nil, nil
+}
+
+func (m *mockEMRAPILogs) TerminateJobFlows(ctx context.Context, input *emr.TerminateJobFlowsInput, optFns ...func(*emr.Options)) (*emr.TerminateJobFlowsOutput, error) {
+	return nil, nil
+}
+
+func (m *mockEMRAPILogs) AddJobFlowSteps(ctx context.Context, input *emr.AddJobFlowStepsInput, optFns ...func(*emr.Options)) (*emr.AddJobFlowStepsOutput, error) {
+	return nil, nil
+}
+
+func (m *mockEMRAPILogs) ListSteps(ctx context.Context, input *emr.ListStepsInput, optFns ...func(*emr.Options)) (*emr.ListStepsOutput, error) {
+	return nil, nil
+}
+
+func (m *mockEMRAPILogs) DescribeStep(ctx context.Context, input *emr.DescribeStepInput, optFns ...func(*emr.Options)) (*emr.DescribeStepOutput, error) {
+	return nil, nil
 }
 
 func mockLogsDownloader(jobflowID string) *LogsDownloader {
 	return &LogsDownloader{
 		JobflowID:  jobflowID,
 		EmrSvc:     &mockEMRAPILogs{},
-		S3Svc:      &mockS3API{},
+		S3Svc:      &mockS3APILogs{},
 		Downloader: &mockDownloaderAPI{},
 	}
 }
@@ -127,12 +147,12 @@ func TestGetStepLogs_Fail(t *testing.T) {
 	assert.NotNil(err)
 	assert.Equal("Couldn't parse LogUri: parse \"://\": missing protocol scheme", err.Error())
 
-	// fails if ListObjectsPages fails
+	// fails if ListObjectsV2 fails
 	ld = mockLogsDownloader("test-get-step-logs-fail")
 	contents, err = ld.GetStepLogs(stepID)
 	assert.Nil(contents)
 	assert.NotNil(err)
-	assert.Equal("Couldn't download step logs: ListObjectsPages failed", err.Error())
+	assert.Equal("Couldn't download step logs: ListObjectsV2 failed", err.Error())
 }
 
 func TestDownloadLogFiles(t *testing.T) {
@@ -142,18 +162,18 @@ func TestDownloadLogFiles(t *testing.T) {
 	prefix := "prefix"
 	stepID := "step-id"
 
-	tmpDirInput, _ := ioutil.TempDir("", "testinput")
-	tmpDirOutput, _ := ioutil.TempDir("", "testoutput")
+	tmpDirInput, _ := os.MkdirTemp("", "testinput")
+	tmpDirOutput, _ := os.MkdirTemp("", "testoutput")
 	filepathInput := filepath.Join(tmpDirInput, prefix, jobflowID, "steps", stepID)
 	filename := "key.txt"
 
 	os.MkdirAll(filepathInput, 0775)
-	ioutil.WriteFile(filepath.Join(filepathInput, filename), []byte("test"), 0644)
+	os.WriteFile(filepath.Join(filepathInput, filename), []byte("test"), 0644)
 	err := ld.DownloadLogFiles(tmpDirInput, prefix, tmpDirOutput, stepID)
 
 	// the mock just writes the file name
 	content, err :=
-		ioutil.ReadFile(filepath.Join(tmpDirOutput, prefix, jobflowID, "steps", stepID, filename))
+		os.ReadFile(filepath.Join(tmpDirOutput, prefix, jobflowID, "steps", stepID, filename))
 	assert.Nil(err)
 	assert.NotNil(content)
 	assert.Equal(filepath.Join(prefix, jobflowID, "steps", stepID, filename), string(content[:]))
@@ -169,10 +189,10 @@ func TestDownloadLogFiles_Fail(t *testing.T) {
 
 	jobflowID := "download-log-files-jobflow-id"
 	ld := mockLogsDownloader(jobflowID)
-	// fails if ListObjectsPages fails
+	// fails if ListObjectsV2 fails
 	err := ld.DownloadLogFiles("error", prefix, "dir", stepID)
 	assert.NotNil(err)
-	assert.Equal("ListObjectsPages failed", err.Error())
+	assert.Equal("ListObjectsV2 failed", err.Error())
 }
 
 func TestGetBucketAndPrefix(t *testing.T) {
