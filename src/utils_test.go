@@ -16,7 +16,6 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -107,7 +106,7 @@ func TestReadGzFile_Fail(t *testing.T) {
 
 	// fails if the file is not gz
 	filename := "/tmp/test-read-not-gz.txt"
-	ioutil.WriteFile(filename, []byte("test"), 06666)
+	os.WriteFile(filename, []byte("test"), 06666)
 	res, err = ReadGzFile("/tmp/test-read-not-gz.txt")
 	assert.Equal("", res)
 	assert.NotNil(err)
@@ -118,7 +117,7 @@ func TestReadGzFile_Fail(t *testing.T) {
 func TestReadGzFiles(t *testing.T) {
 	assert := assert.New(t)
 
-	dir, _ := ioutil.TempDir("", "test-read-gzs")
+	dir, _ := os.MkdirTemp("", "test-read-gzs")
 	for i := 0; i < 3; i++ {
 		WriteGzFile("test-read-gzs-"+strconv.Itoa(i)+".txt", dir, "test"+strconv.Itoa(i))
 	}
@@ -144,8 +143,8 @@ func TestReadGzFiles_Fail(t *testing.T) {
 	assert.Equal("open /not-existing-dir: no such file or directory", err.Error())
 
 	// fails if it doesn't contain gz
-	dir, _ := ioutil.TempDir("", "test-read-gzs-fail")
-	ioutil.WriteFile(filepath.Join(dir, "test.gz"), []byte("test"), 06666)
+	dir, _ := os.MkdirTemp("", "test-read-gzs-fail")
+	os.WriteFile(filepath.Join(dir, "test.gz"), []byte("test"), 06666)
 	res, err = ReadGzFiles(dir)
 	assert.Nil(res)
 	assert.NotNil(err)
@@ -160,6 +159,6 @@ func WriteGzFile(name, dir, content string) string {
 	zw.Write([]byte(content))
 	zw.Close()
 	filename := filepath.Join(dir, zw.Name+".gz")
-	ioutil.WriteFile(filename, buf.Bytes(), 0666)
+	os.WriteFile(filename, buf.Bytes(), 0666)
 	return filename
 }

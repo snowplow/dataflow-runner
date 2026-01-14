@@ -16,26 +16,22 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"errors"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-	"github.com/aws/aws-sdk-go/service/s3/s3manager/s3manageriface"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/assert"
 )
 
-type mockDownloaderAPI struct {
-	s3manageriface.DownloaderAPI
-}
+type mockDownloaderAPI struct{}
 
-func (m *mockDownloaderAPI) Download(w io.WriterAt, i *s3.GetObjectInput, options ...func(*s3manager.Downloader)) (int64, error) {
+func (m *mockDownloaderAPI) Download(ctx context.Context, w io.WriterAt, i *s3.GetObjectInput, options ...func(*manager.Downloader)) (int64, error) {
 	if *i.Bucket == "" {
 		return int64(0), errors.New("Download failed")
 	}
@@ -63,7 +59,7 @@ func mockS3Downloader(bucket, dir string) *S3Downloader {
 
 func TestDownloadToFile(t *testing.T) {
 	assert := assert.New(t)
-	tmpDir, _ := ioutil.TempDir("", "download-to-file")
+	tmpDir, _ := os.MkdirTemp("", "download-to-file")
 	s3Downloader := mockS3Downloader("bucket", tmpDir)
 
 	key := "key"
@@ -72,7 +68,7 @@ func TestDownloadToFile(t *testing.T) {
 
 	filepath := filepath.Join(tmpDir, key)
 
-	content, err := ioutil.ReadFile(filepath)
+	content, err := os.ReadFile(filepath)
 	assert.Nil(err)
 	assert.NotNil(content)
 	assert.Equal(key, string(content[:]))
@@ -96,24 +92,4 @@ func TestDownloadToFile_Fail(t *testing.T) {
 	err = s3Downloader.DownloadToFile("key")
 	assert.NotNil(err)
 	assert.Equal("Download failed", err.Error())
-}
-
-func TestEachPage(t *testing.T) {
-	assert := assert.New(t)
-	tmpDir, _ := ioutil.TempDir("", "download-to-file")
-	s3Downloader := mockS3Downloader("bucket", tmpDir)
-
-	key := "key"
-	listObjectsOutput := &s3.ListObjectsOutput{Contents: []*s3.Object{{Key: aws.String(key)}}}
-	res := s3Downloader.EachPage(listObjectsOutput, true)
-	assert.Equal(true, res)
-
-	filepath := filepath.Join(tmpDir, key)
-
-	content, err := ioutil.ReadFile(filepath)
-	assert.Nil(err)
-	assert.NotNil(content)
-	assert.Equal(key, string(content[:]))
-
-	os.RemoveAll(tmpDir)
 }

@@ -17,21 +17,17 @@
 package main
 
 import (
-	"errors"
+	"context"
+	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
-	"fmt"
-
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/service/emr"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/emr"
+	"github.com/getsentry/sentry-go"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
-
-	"github.com/getsentry/sentry-go"
 )
 
 const (
@@ -53,6 +49,13 @@ const (
 	fSentry          = "sentry"
 	lockHeldExitCode = 17
 	otherExitCode    = 1
+
+	// logRotationWaitSeconds is the time to wait for EMR log files to be rotated to S3
+	logRotationWaitSeconds = 300
+	// maxClusterWaitDuration is the maximum time to wait for a cluster to terminate (14 days)
+	maxClusterWaitDuration = 14 * 24 * time.Hour
+	// clusterPollInterval is the interval between cluster state checks
+	clusterPollInterval = 45 * time.Second
 )
 
 func main() {
@@ -109,11 +112,11 @@ func main() {
 				getSentryFlag(),
 			},
 			Action: func(c *cli.Context) error {
-				sentry := c.String(fSentry)
-				sentryEnabled := len(sentry) > 0
+				sentryDSN := c.String(fSentry)
+				sentryEnabled := len(sentryDSN) > 0
 
 				if sentryEnabled {
-					err := initializeSentry(sentry)
+					err := initializeSentry(sentryDSN)
 					if err != nil {
 						return cli.NewExitError(err, otherExitCode)
 					}
@@ -127,7 +130,7 @@ func main() {
 					return exitCodeError(sentryEnabled, err)
 				}
 
-				log.Info("EMR cluster launched successfully; Jobflow ID: " + jobflowID)
+				log.Infof("EMR cluster launched successfully; Jobflow ID: %s", jobflowID)
 				return nil
 			},
 		},
@@ -154,11 +157,11 @@ func main() {
 				softLock := c.String(fSoftLock)
 				consul := c.String(fConsul)
 				vars := c.String(fVars)
-				sentry := c.String(fSentry)
-				sentryEnabled := len(sentry) > 0
+				sentryDSN := c.String(fSentry)
+				sentryEnabled := len(sentryDSN) > 0
 
 				if sentryEnabled {
-					err := initializeSentry(sentry)
+					err := initializeSentry(sentryDSN)
 					if err != nil {
 						return cli.NewExitError(err, otherExitCode)
 					}
@@ -179,10 +182,8 @@ func main() {
 				if logFailedSteps && len(failedStepsIDs) > 0 {
 					// Here we can't leverage the time spent downing the cluster to make sure log files have
 					// been rotated. As a result, we just sleep.
-					sleep := 300
-					log.Info("Sleeping for " + strconv.Itoa(sleep) +
-						" seconds waiting for the logs to be rotated")
-					time.Sleep(time.Second * time.Duration(sleep))
+					log.Infof("Sleeping for %d seconds waiting for the logs to be rotated", logRotationWaitSeconds)
+					time.Sleep(time.Second * time.Duration(logRotationWaitSeconds))
 					displayFailedStepsLogs(failedStepsIDs, emrPlaybook, jobflowID, vars)
 				}
 
@@ -210,11 +211,11 @@ func main() {
 				getSentryFlag(),
 			},
 			Action: func(c *cli.Context) error {
-				sentry := c.String(fSentry)
-				sentryEnabled := len(sentry) > 0
+				sentryDSN := c.String(fSentry)
+				sentryEnabled := len(sentryDSN) > 0
 
 				if sentryEnabled {
-					err := initializeSentry(sentry)
+					err := initializeSentry(sentryDSN)
 					if err != nil {
 						return cli.NewExitError(err, otherExitCode)
 					}
@@ -254,11 +255,11 @@ func main() {
 				softLock := c.String(fSoftLock)
 				consul := c.String(fConsul)
 				vars := c.String(fVars)
-				sentry := c.String(fSentry)
-				sentryEnabled := len(sentry) > 0
+				sentryDSN := c.String(fSentry)
+				sentryEnabled := len(sentryDSN) > 0
 
 				if sentryEnabled {
-					err := initializeSentry(sentry)
+					err := initializeSentry(sentryDSN)
 					if err != nil {
 						return cli.NewExitError(err, otherExitCode)
 					}
@@ -300,18 +301,30 @@ func main() {
 					return exitCodeError(sentryEnabled, err)
 				}
 
-				log.Info("Transient EMR run with jobflow ID [" + jobFlowSteps.JobflowID + "] started successfully")
+				log.Infof("Transient EMR run with jobflow ID [%s] started successfully", jobFlowSteps.JobflowID)
 
 				log.Info("Waiting until cluster is terminated...")
-				err = emrCluster.Svc.WaitUntilClusterTerminatedWithContext(
-					aws.BackgroundContext(),
+
+				// Use SDK v2 waiter for cluster termination
+				// Safe type assertion - in production this will always be *emr.Client
+				emrClient, ok := emrCluster.Svc.(*emr.Client)
+				if !ok {
+					if lock != nil && softLock != "" {
+						lock.Unlock()
+					}
+					return exitCodeError(sentryEnabled, fmt.Errorf("failed to create cluster termination waiter: EMR service is not a concrete client"))
+				}
+
+				waiter := emr.NewClusterTerminatedWaiter(emrClient, func(o *emr.ClusterTerminatedWaiterOptions) {
+					o.MinDelay = clusterPollInterval
+					o.MaxDelay = clusterPollInterval
+				})
+
+				err = waiter.Wait(context.Background(),
 					&emr.DescribeClusterInput{
 						ClusterId: aws.String(jobFlowSteps.JobflowID),
 					},
-					request.WithWaiterDelay(request.ConstantWaiterDelay(45*time.Second)),
-					func(w *request.Waiter) {
-						w.MaxAttempts = 26880
-					},
+					maxClusterWaitDuration,
 				)
 				if err != nil {
 					if lock != nil && softLock != "" {
@@ -320,7 +333,7 @@ func main() {
 					return exitCodeError(sentryEnabled, err)
 				}
 
-				log.Info("EMR cluster with ID [" + jobFlowSteps.JobflowID + "] is terminated successfully")
+				log.Infof("EMR cluster with ID [%s] is terminated successfully", jobFlowSteps.JobflowID)
 
 				failedStepIDs, err := jobFlowSteps.GetFailedStepIDs()
 
@@ -455,7 +468,7 @@ func runJobFlowWithSteps(emrCluster *EmrCluster, playbookRecord *PlaybookConfig)
 
 	jobFlowInput.Steps = addJobFlowStepsInput.Steps
 
-	jobFlowOutput, err := emrCluster.Svc.RunJobFlow(jobFlowInput)
+	jobFlowOutput, err := emrCluster.Svc.RunJobFlow(context.Background(), jobFlowInput)
 	if err != nil {
 		return nil, err
 	}
@@ -469,7 +482,8 @@ func runJobFlowWithSteps(emrCluster *EmrCluster, playbookRecord *PlaybookConfig)
 func displayFailedStepsLogs(failedStepsIDs []string, emrPlaybook, jobflowID, vars string) {
 	playbookRecord, err := parsePlaybookRecord(emrPlaybook, vars)
 	if err != nil {
-		log.Error("Couldn't parse playbook record: " + err.Error())
+		log.Errorf("Couldn't parse playbook record: %s", err.Error())
+		return
 	}
 	logsDownloader, err := InitLogsDownloader(
 		playbookRecord.Credentials.AccessKeyId,
@@ -478,15 +492,17 @@ func displayFailedStepsLogs(failedStepsIDs []string, emrPlaybook, jobflowID, var
 		jobflowID,
 	)
 	if err != nil {
-		log.Error("Couldn't retrieve failed steps' logs: " + err.Error())
+		log.Errorf("Couldn't retrieve failed steps' logs: %s", err.Error())
+		return
 	}
 	for _, stepID := range failedStepsIDs {
 		logs, err := logsDownloader.GetStepLogs(stepID)
 		if err != nil {
-			log.Error("Couldn't retrieve logs for step " + stepID + ": " + err.Error())
+			log.Errorf("Couldn't retrieve logs for step %s: %s", stepID, err.Error())
+			continue
 		}
 		for filename, content := range logs {
-			log.Info("Content of log file '" + filename + "' for step " + stepID + ":")
+			log.Infof("Content of log file '%s' for step %s:", filename, stepID)
 			log.Info(content)
 		}
 	}
@@ -549,7 +565,7 @@ func downWithConfig(clusterRecord *ClusterConfig, emrCluster string) error {
 // --- Helpers
 
 func initializeSentry(dsn string) error {
-	log.Info("Initializing sentry with dsn: " + dsn)
+	log.Infof("Initializing sentry with dsn: %s", dsn)
 	return sentry.Init(sentry.ClientOptions{
 		Dsn:     dsn,
 		Release: cliVersion,
@@ -558,38 +574,36 @@ func initializeSentry(dsn string) error {
 
 // flagToError returns a generic error for a missing flag
 func flagToError(flag string) error {
-	return errors.New("--" + flag + " needs to be specified")
+	return fmt.Errorf("--%s needs to be specified", flag)
 }
 
 // checkLockFlags checks the validity of the lock-related flags
 func checkLockFlags(async bool, hardLock, softLock, consul string) error {
 	if consul != "" && hardLock == "" && softLock == "" {
-		return errors.New(
-			"--" + fLock + " or --" + fSoftLock + " is needed to make use of --" + fConsul)
+		return fmt.Errorf("--%s or --%s is needed to make use of --%s", fLock, fSoftLock, fConsul)
 	}
 	if hardLock != "" && softLock != "" {
-		return errors.New("--" + fLock + " and --" + fSoftLock + " are mutually exclusive")
+		return fmt.Errorf("--%s and --%s are mutually exclusive", fLock, fSoftLock)
 	}
 	if async && (hardLock != "" || softLock != "") {
-		return errors.New(
-			"--" + fAsync + " and --" + fLock + " or --" + fSoftLock + " are not compatible")
+		return fmt.Errorf("--%s and --%s or --%s are not compatible", fAsync, fLock, fSoftLock)
 	}
 	return nil
 }
 
 // varsToMap converts the variables argument to a map of
 // keys and values
-func varsToMap(vars string) (map[string]interface{}, error) {
+func varsToMap(vars string) (map[string]any, error) {
 	if vars == "" {
-		return map[string]interface{}{}, nil
+		return map[string]any{}, nil
 	}
 
 	varsArr := strings.Split(vars, varDelim)
 	if len(varsArr)%2 != 0 {
-		return nil, errors.New("--" + fVars + " must have an even number of keys and values")
+		return nil, fmt.Errorf("--%s must have an even number of keys and values", fVars)
 	}
 
-	varsMap := make(map[string]interface{})
+	varsMap := make(map[string]any)
 	for i := 0; i < len(varsArr); i += 2 {
 		varsMap[varsArr[i]] = varsArr[i+1]
 	}
