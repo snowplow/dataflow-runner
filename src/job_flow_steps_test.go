@@ -14,44 +14,49 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"strings"
-
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/emr"
-	"github.com/aws/aws-sdk-go/service/emr/emriface"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/emr"
+	"github.com/aws/aws-sdk-go-v2/service/emr/types"
 	"github.com/stretchr/testify/assert"
 )
 
-type mockEMRAPISteps struct {
-	emriface.EMRAPI
-}
+type mockEMRAPISteps struct{}
 
-func (m *mockEMRAPISteps) AddJobFlowSteps(input *emr.AddJobFlowStepsInput) (*emr.AddJobFlowStepsOutput, error) {
+func (m *mockEMRAPISteps) AddJobFlowSteps(ctx context.Context, input *emr.AddJobFlowStepsInput, optFns ...func(*emr.Options)) (*emr.AddJobFlowStepsOutput, error) {
 	if !strings.HasPrefix(*input.JobFlowId, "j-") {
 		return nil, errors.New("AddJobFlowSteps failed")
 	}
 	return &emr.AddJobFlowStepsOutput{
-		StepIds: []*string{aws.String("1")},
+		StepIds: []string{"1"},
 	}, nil
 }
 
 // Mock using the cluster id of input to set the step State
 // ClusterId = "j-PENDING" will result in a step with the PENDING state
-func (m *mockEMRAPISteps) DescribeStep(input *emr.DescribeStepInput) (*emr.DescribeStepOutput, error) {
+func (m *mockEMRAPISteps) DescribeStep(ctx context.Context, input *emr.DescribeStepInput, optFns ...func(*emr.Options)) (*emr.DescribeStepOutput, error) {
 	if !strings.HasPrefix(*input.ClusterId, "j-") {
 		return nil, errors.New("DescribeStep failed")
 	}
-	var state string
-	var states = []string{"PENDING", "CANCEL_PENDING", "RUNNING", "COMPLETED", "CANCELLED",
-		"FAILED", "INTERRUPTED"}
+	var state types.StepState
+	var states = []types.StepState{
+		types.StepStatePending,
+		types.StepStateCancelPending,
+		types.StepStateRunning,
+		types.StepStateCompleted,
+		types.StepStateCancelled,
+		types.StepStateFailed,
+		types.StepStateInterrupted,
+	}
 	for _, e := range states {
-		if strings.Contains(*input.ClusterId, e) {
+		if strings.Contains(*input.ClusterId, string(e)) {
 			state = e
 			break
 		}
@@ -61,18 +66,34 @@ func (m *mockEMRAPISteps) DescribeStep(input *emr.DescribeStepInput) (*emr.Descr
 	}
 	testTime := time.Date(2019, time.October, 10, 23, 0, 0, 0, time.UTC)
 	return &emr.DescribeStepOutput{
-		Step: &emr.Step{
+		Step: &types.Step{
 			Name: aws.String("step"),
 			Id:   aws.String("step-id"),
-			Status: &emr.StepStatus{
-				State: aws.String(state),
-				Timeline: &emr.StepTimeline{
+			Status: &types.StepStatus{
+				State: state,
+				Timeline: &types.StepTimeline{
 					StartDateTime: &testTime,
 					EndDateTime:   &testTime,
 				},
 			},
 		},
 	}, nil
+}
+
+func (m *mockEMRAPISteps) RunJobFlow(ctx context.Context, input *emr.RunJobFlowInput, optFns ...func(*emr.Options)) (*emr.RunJobFlowOutput, error) {
+	return nil, nil
+}
+
+func (m *mockEMRAPISteps) TerminateJobFlows(ctx context.Context, input *emr.TerminateJobFlowsInput, optFns ...func(*emr.Options)) (*emr.TerminateJobFlowsOutput, error) {
+	return nil, nil
+}
+
+func (m *mockEMRAPISteps) DescribeCluster(ctx context.Context, input *emr.DescribeClusterInput, optFns ...func(*emr.Options)) (*emr.DescribeClusterOutput, error) {
+	return nil, nil
+}
+
+func (m *mockEMRAPISteps) ListSteps(ctx context.Context, input *emr.ListStepsInput, optFns ...func(*emr.Options)) (*emr.ListStepsOutput, error) {
+	return nil, nil
 }
 
 func mockJobFlowSteps(playbookConfig PlaybookConfig, jobflowID string) *JobFlowSteps {
@@ -195,7 +216,7 @@ func TestRetrieveStepsStates(t *testing.T) {
 	assert := assert.New(t)
 
 	jfs := mockJobFlowStepsWithoutPlaybook("j-COMPLETED")
-	successCount, failureCount, failedStepsIds, infoLogs, errorLogs, err := jfs.RetrieveStepsStates([]*string{aws.String("step-id")})
+	successCount, failureCount, failedStepsIds, infoLogs, errorLogs, err := jfs.RetrieveStepsStates([]string{"step-id"})
 	assert.Equal(1, successCount)
 	assert.Equal(0, failureCount)
 	assert.NotNil(failedStepsIds)
@@ -207,7 +228,7 @@ func TestRetrieveStepsStates(t *testing.T) {
 	assert.Nil(err)
 
 	jfs = mockJobFlowStepsWithoutPlaybook("j-CANCELLED")
-	successCount, failureCount, failedStepsIds, infoLogs, errorLogs, err = jfs.RetrieveStepsStates([]*string{aws.String("step-id")})
+	successCount, failureCount, failedStepsIds, infoLogs, errorLogs, err = jfs.RetrieveStepsStates([]string{"step-id"})
 	assert.Equal(0, successCount)
 	assert.Equal(1, failureCount)
 	assert.NotNil(failedStepsIds)
@@ -224,7 +245,7 @@ func TestRetrieveStepsStates_Fail(t *testing.T) {
 
 	// fails if one DescribeStep fails
 	jfs := mockJobFlowStepsWithoutPlaybook("j-NOTHING")
-	successCount, failureCount, failedStepsIds, infoLogs, errorLogs, err := jfs.RetrieveStepsStates([]*string{aws.String("step-id")})
+	successCount, failureCount, failedStepsIds, infoLogs, errorLogs, err := jfs.RetrieveStepsStates([]string{"step-id"})
 	assert.Equal(0, successCount)
 	assert.Equal(0, failureCount)
 	assert.Nil(failedStepsIds)
@@ -241,7 +262,7 @@ func TestRetrieveStepState(t *testing.T) {
 	// log completed steps
 	jfs := mockJobFlowStepsWithoutPlaybook("j-COMPLETED")
 	state, logs, err := jfs.RetrieveStepState(stepID)
-	assert.Equal("COMPLETED", state)
+	assert.Equal(types.StepStateCompleted, state)
 	assert.NotNil(logs)
 	assert.Equal([]string{"Step 'step' with id 'step-id' completed successfully - StartTime: 2019-10-10T23:00:00Z - EndTime: 2019-10-10T23:00:00Z"}, logs)
 	assert.Nil(err)
@@ -249,7 +270,7 @@ func TestRetrieveStepState(t *testing.T) {
 	// log cancelled steps
 	jfs = mockJobFlowStepsWithoutPlaybook("j-CANCELLED")
 	state, logs, err = jfs.RetrieveStepState(stepID)
-	assert.Equal("CANCELLED", state)
+	assert.Equal(types.StepStateCancelled, state)
 	assert.NotNil(logs)
 	assert.Equal([]string{"Step 'step' with id 'step-id' was CANCELLED"}, logs)
 	assert.Nil(err)
@@ -257,7 +278,7 @@ func TestRetrieveStepState(t *testing.T) {
 	// outputs the failed step log
 	jfs = mockJobFlowStepsWithoutPlaybook("j-FAILED")
 	state, logs, err = jfs.RetrieveStepState(stepID)
-	assert.Equal("FAILED", state)
+	assert.Equal(types.StepStateFailed, state)
 	assert.NotNil(logs)
 	assert.Equal([]string{"Step 'step' with id 'step-id' was FAILED - StartTime: 2019-10-10T23:00:00Z - EndTime: 2019-10-10T23:00:00Z"}, logs)
 	assert.Nil(err)
@@ -265,7 +286,7 @@ func TestRetrieveStepState(t *testing.T) {
 	// ignores steps that are running
 	jfs = mockJobFlowStepsWithoutPlaybook("j-RUNNING")
 	state, logs, err = jfs.RetrieveStepState(stepID)
-	assert.Equal("RUNNING", state)
+	assert.Equal(types.StepStateRunning, state)
 	assert.Equal([]string{}, logs)
 	assert.Nil(err)
 }
@@ -277,7 +298,7 @@ func TestRetrieveStepState_Fail(t *testing.T) {
 	// fails if DescribeStep fails
 	jfs := mockJobFlowStepsWithoutPlaybook("j-nothing")
 	state, logs, err := jfs.RetrieveStepState(stepID)
-	assert.Equal("", state)
+	assert.Equal(types.StepState(""), state)
 	assert.Nil(logs)
 	assert.NotNil(err)
 	assert.Equal("Couldn't retrieve step step-id state: emr.DescribeStep: DescribeStep failed", err.Error())

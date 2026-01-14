@@ -14,7 +14,6 @@
 package main
 
 import (
-	"io/ioutil"
 	"os"
 	"strconv"
 	"testing"
@@ -167,7 +166,7 @@ func TestToSelfDescribingRecord(t *testing.T) {
 func TestTemplateRawBytes(t *testing.T) {
 	assert := assert.New(t)
 
-	varMap := map[string]interface{}{
+	varMap := map[string]any{
 		"someVar": "golangTestVar",
 	}
 
@@ -251,7 +250,7 @@ func TestTemplateRawBytes_base64File(t *testing.T) {
 	assert := assert.New(t)
 
 	content := []byte("abc")
-	tmpFile, err := ioutil.TempFile("", "base64File")
+	tmpFile, err := os.CreateTemp("", "base64File")
 	assert.Nil(err)
 	defer os.Remove(tmpFile.Name())
 	_, err = tmpFile.Write(content)

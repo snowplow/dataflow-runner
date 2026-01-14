@@ -14,7 +14,6 @@
 package main
 
 import (
-	"io/ioutil"
 	"os"
 	"strconv"
 	"testing"
@@ -102,7 +101,7 @@ func TestFileLock(t *testing.T) {
 
 	// write to the file so that we can't get a lock on it
 	pid := os.Getppid()
-	err = ioutil.WriteFile(lockPath, []byte(strconv.Itoa(pid)+"\n"), 0666)
+	err = os.WriteFile(lockPath, []byte(strconv.Itoa(pid)+"\n"), 0666)
 	assert.Nil(err)
 
 	err = fl.TryLock()

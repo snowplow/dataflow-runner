@@ -15,31 +15,47 @@ package main
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
-	"io/ioutil"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds"
-	"github.com/aws/aws-sdk-go/aws/defaults"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/ec2rolecreds"
 )
 
 // GetCredentialsProvider attempts to fetch credentials from either:
-// 1. IAM Role
-// 2. ENV Variables
+// 1. IAM Role (EC2 instance role via IMDS)
+// 2. ENV Variables (uses default credential chain which handles env vars)
 // 3. Default Credential Chain
 // 4. Static Credentials
-func GetCredentialsProvider(a string, s string) (*credentials.Credentials, error) {
+//
+// All credential providers are wrapped with aws.NewCredentialsCache for:
+// - Thread-safe concurrent access
+// - Automatic credential caching and refresh
+func GetCredentialsProvider(a string, s string) (aws.CredentialsProvider, error) {
 	if isIam(a) && isIam(s) {
-		return credentials.NewCredentials(&ec2rolecreds.EC2RoleProvider{}), nil
+		// EC2 role credentials must be wrapped for thread safety and caching
+		return aws.NewCredentialsCache(ec2rolecreds.New()), nil
 	} else if isEnv(a) && isEnv(s) {
-		return credentials.NewEnvCredentials(), nil
+		// Use default credential chain which properly handles environment variables
+		// and supports credential refresh
+		cfg, err := config.LoadDefaultConfig(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		return cfg.Credentials, nil
 	} else if isDefault(a) && isDefault(s) {
-		cfg := defaults.Config()
-		handlers := defaults.Handlers()
-		return defaults.CredChain(cfg, handlers), nil
+		cfg, err := config.LoadDefaultConfig(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		return cfg.Credentials, nil
 	} else if isIam(a) || isIam(s) {
 		return nil, errors.New("access-key and secret-key must both be set to 'iam', or neither")
 	} else if isEnv(a) || isEnv(s) {
@@ -47,7 +63,8 @@ func GetCredentialsProvider(a string, s string) (*credentials.Credentials, error
 	} else if isDefault(a) || isDefault(s) {
 		return nil, errors.New("access-key and secret-key must both be set to 'default', or neither")
 	} else {
-		return credentials.NewStaticCredentials(a, s, ""), nil
+		// Static credentials also benefit from caching wrapper
+		return aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(a, s, "")), nil
 	}
 }
 
@@ -67,7 +84,7 @@ func isDefault(key string) bool {
 }
 
 // InterfaceToJSONString writes an interface as a JSON
-func InterfaceToJSONString(m interface{}, pretty bool) string {
+func InterfaceToJSONString(m any, pretty bool) string {
 	var b []byte
 	var err error
 
@@ -85,12 +102,7 @@ func InterfaceToJSONString(m interface{}, pretty bool) string {
 
 // StringInSlice checks whether or not a string is in an array
 func StringInSlice(a string, list []string) bool {
-	for _, b := range list {
-		if b == a {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, a)
 }
 
 // ReadGzFile reads a gzipped file
@@ -107,7 +119,7 @@ func ReadGzFile(filename string) (string, error) {
 	}
 	defer fz.Close()
 
-	s, err := ioutil.ReadAll(fz)
+	s, err := io.ReadAll(fz)
 	if err != nil {
 		return "", err
 	}
@@ -116,18 +128,18 @@ func ReadGzFile(filename string) (string, error) {
 
 // ReadGzFiles lists the files in dir and return their un-gzipped content
 func ReadGzFiles(dir string) (map[string]string, error) {
-	files, err := ioutil.ReadDir(dir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 
 	m := make(map[string]string)
-	for _, file := range files {
-		content, err := ReadGzFile(filepath.Join(dir, file.Name()))
+	for _, entry := range entries {
+		content, err := ReadGzFile(filepath.Join(dir, entry.Name()))
 		if err != nil {
 			return nil, err
 		}
-		m[file.Name()] = content
+		m[entry.Name()] = content
 	}
 	return m, nil
 }
