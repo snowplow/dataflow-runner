@@ -117,6 +117,7 @@ func (ec EmrCluster) runJobFlow(ctx context.Context, sleepTime int) (string, err
 	var retryCount = 3
 	var clusterState string
 	var jobflowID string
+	var reasonCode, reasonMessage string
 
 	for !done && retryCount > 0 {
 		resp, err := retry.ExponentialWithInterface(3, time.Second, "emr.RunJobFlow", func() (interface{}, error) {
@@ -132,6 +133,11 @@ func (ec EmrCluster) runJobFlow(ctx context.Context, sleepTime int) (string, err
 		clusterStatus, err := ec.waitForClusterReady(ctx, *runJobFlowOutput.JobFlowId)
 		if err != nil && clusterStatus == nil {
 			return "", err
+		}
+
+		reasonCode, reasonMessage = clusterStateChangeReason(clusterStatus)
+		if reasonCode != "" || reasonMessage != "" {
+			log.Errorf("EMR cluster state change reason: code='%s' message=%q", reasonCode, reasonMessage)
 		}
 
 		if clusterStatus.StateChangeReason != nil &&
@@ -151,13 +157,29 @@ func (ec EmrCluster) runJobFlow(ctx context.Context, sleepTime int) (string, err
 	}
 
 	if retryCount <= 0 {
-		return "", fmt.Errorf("could not start the cluster due to bootstrap failure")
+		return "", fmt.Errorf("could not start the cluster due to bootstrap failure: code=%s message=%q", reasonCode, reasonMessage)
 	}
 
 	if clusterState == "WAITING" {
 		return jobflowID, nil
 	}
+	if reasonCode != "" || reasonMessage != "" {
+		return "", fmt.Errorf("EMR cluster failed to launch with state %s: code=%s message=%q", clusterState, reasonCode, reasonMessage)
+	}
 	return "", fmt.Errorf("EMR cluster failed to launch with state %s", clusterState)
+}
+
+// clusterStateChangeReason returns the StateChangeReason code and message, or empty strings if unset.
+func clusterStateChangeReason(status *types.ClusterStatus) (string, string) {
+	if status == nil || status.StateChangeReason == nil {
+		return "", ""
+	}
+	code := string(status.StateChangeReason.Code)
+	msg := ""
+	if status.StateChangeReason.Message != nil {
+		msg = *status.StateChangeReason.Message
+	}
+	return code, msg
 }
 
 // waitForClusterReady waits for the cluster to reach RUNNING or WAITING state using SDK v2 waiter.
