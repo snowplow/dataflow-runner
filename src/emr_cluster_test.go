@@ -51,7 +51,7 @@ func (m *mockEMRAPICluster) DescribeCluster(ctx context.Context, input *emr.Desc
 		types.ClusterStateTerminatedWithErrors,
 	}
 	for _, e := range states {
-		if strings.Contains(*input.ClusterId, string(e)) {
+		if strings.TrimPrefix(*input.ClusterId, "j-") == string(e) {
 			state = e
 			break
 		}
@@ -65,7 +65,21 @@ func (m *mockEMRAPICluster) DescribeCluster(ctx context.Context, input *emr.Desc
 				Status: &types.ClusterStatus{
 					State: state,
 					StateChangeReason: &types.ClusterStateChangeReason{
-						Code: types.ClusterStateChangeReasonCodeBootstrapFailure,
+						Code:    types.ClusterStateChangeReasonCodeBootstrapFailure,
+						Message: aws.String("Bootstrap action returned a non-zero return code"),
+					},
+				},
+			},
+		}, nil
+	}
+	if state == types.ClusterStateTerminatedWithErrors {
+		return &emr.DescribeClusterOutput{
+			Cluster: &types.Cluster{
+				Status: &types.ClusterStatus{
+					State: state,
+					StateChangeReason: &types.ClusterStateChangeReason{
+						Code:    types.ClusterStateChangeReasonCodeValidationError,
+						Message: aws.String("On the master instance, application provisioning failed"),
 					},
 				},
 			},
@@ -188,7 +202,7 @@ func TestRunJobFlow_Fail(t *testing.T) {
 	ec = mockEmrCluster(*record)
 	_, err = ec.runJobFlow(ctx, 3)
 	assert.NotNil(err)
-	assert.Equal("could not start the cluster due to bootstrap failure", err.Error())
+	assert.Equal("could not start the cluster due to bootstrap failure: code=BOOTSTRAP_FAILURE message=\"Bootstrap action returned a non-zero return code\"", err.Error())
 
 	// fails if the cluster state is not WAITING
 	record.Name = "TERMINATING"
@@ -196,6 +210,13 @@ func TestRunJobFlow_Fail(t *testing.T) {
 	_, err = ec.runJobFlow(ctx, 3)
 	assert.NotNil(err)
 	assert.Equal("EMR cluster failed to launch with state TERMINATING", err.Error())
+
+	// surfaces the StateChangeReason code and message when present on a non-bootstrap failure
+	record.Name = "TERMINATED_WITH_ERRORS"
+	ec = mockEmrCluster(*record)
+	_, err = ec.runJobFlow(ctx, 3)
+	assert.NotNil(err)
+	assert.Equal("EMR cluster failed to launch with state TERMINATED_WITH_ERRORS: code=VALIDATION_ERROR message=\"On the master instance, application provisioning failed\"", err.Error())
 }
 
 func TestRunJobFlow_Success(t *testing.T) {
