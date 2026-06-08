@@ -228,6 +228,29 @@ func TestRunJobFlow_Success(t *testing.T) {
 	assert.Equal(t, "j-WAITING", id)
 }
 
+func TestFetchStateChangeReason(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
+	ec := mockEmrCluster(*record)
+
+	// A cluster with a StateChangeReason returns its code and message
+	code, message, err := ec.fetchStateChangeReason(ctx, "j-TERMINATED_WITH_ERRORS")
+	assert.Nil(err)
+	assert.Equal("VALIDATION_ERROR", code)
+	assert.Equal("On the master instance, application provisioning failed", message)
+
+	// A cluster with no StateChangeReason returns empty strings and no error
+	code, message, err = ec.fetchStateChangeReason(ctx, "j-STARTING")
+	assert.Nil(err)
+	assert.Equal("", code)
+	assert.Equal("", message)
+
+	// A DescribeCluster failure is returned as an error
+	_, _, err = ec.fetchStateChangeReason(ctx, "bad")
+	assert.NotNil(err)
+}
+
 func TestGetJobFlowInput_Success(t *testing.T) {
 	assert := assert.New(t)
 
