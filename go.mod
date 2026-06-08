@@ -1,6 +1,6 @@
 module github.com/snowplow/dataflow-runner
 
-go 1.24.11
+go 1.25.11
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5
@@ -60,7 +60,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/snowplow-devops/go-retry v0.0.0-20210106090855-8989bbdbae1c
-	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
