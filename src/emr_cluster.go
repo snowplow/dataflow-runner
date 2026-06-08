@@ -182,6 +182,20 @@ func clusterStateChangeReason(status *types.ClusterStatus) (string, string) {
 	return code, msg
 }
 
+// fetchStateChangeReason describes the cluster and returns its StateChangeReason code and message.
+// It returns a non-nil error if the cluster cannot be described, or empty strings if no reason is set.
+func (ec EmrCluster) fetchStateChangeReason(ctx context.Context, jobflowID string) (string, string, error) {
+	resp, err := ec.Svc.DescribeCluster(ctx, &emr.DescribeClusterInput{ClusterId: aws.String(jobflowID)})
+	if err != nil {
+		return "", "", err
+	}
+	if resp.Cluster == nil || resp.Cluster.Status == nil {
+		return "", "", nil
+	}
+	code, message := clusterStateChangeReason(resp.Cluster.Status)
+	return code, message, nil
+}
+
 // waitForClusterReady waits for the cluster to reach RUNNING or WAITING state using SDK v2 waiter.
 // Returns the cluster status even on failure (needed for bootstrap failure detection).
 func (ec EmrCluster) waitForClusterReady(ctx context.Context, jobflowID string) (*types.ClusterStatus, error) {

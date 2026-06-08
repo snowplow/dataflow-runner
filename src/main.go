@@ -329,14 +329,12 @@ func main() {
 				if err != nil {
 					// The terminated waiter only returns a generic "transitioned to Failure" error, so
 					// re-describe the cluster to recover and surface the underlying StateChangeReason.
-					if desc, derr := emrCluster.Svc.DescribeCluster(context.Background(),
-						&emr.DescribeClusterInput{ClusterId: aws.String(jobFlowSteps.JobflowID)}); derr == nil &&
-						desc.Cluster != nil && desc.Cluster.Status != nil {
-						if code, message := clusterStateChangeReason(desc.Cluster.Status); code != "" || message != "" {
-							log.Errorf("EMR cluster state change reason: code='%s' message=%q", code, message)
-							err = fmt.Errorf("EMR cluster %s terminated with errors: code=%s message=%q",
-								jobFlowSteps.JobflowID, code, message)
-						}
+					if code, message, derr := emrCluster.fetchStateChangeReason(context.Background(), jobFlowSteps.JobflowID); derr != nil {
+						log.Warnf("could not re-describe cluster to get StateChangeReason: %v", derr)
+					} else if code != "" || message != "" {
+						log.Errorf("EMR cluster state change reason: code='%s' message=%q", code, message)
+						err = fmt.Errorf("EMR cluster %s terminated with errors: code=%s message=%q",
+							jobFlowSteps.JobflowID, code, message)
 					}
 					if lock != nil && softLock != "" {
 						lock.Unlock()
