@@ -327,6 +327,15 @@ func main() {
 					maxClusterWaitDuration,
 				)
 				if err != nil {
+					// The terminated waiter only returns a generic "transitioned to Failure" error, so
+					// re-describe the cluster to recover and surface the underlying StateChangeReason.
+					if code, message, derr := emrCluster.fetchStateChangeReason(context.Background(), jobFlowSteps.JobflowID); derr != nil {
+						log.Warnf("could not re-describe cluster to get StateChangeReason: %v", derr)
+					} else if code != "" || message != "" {
+						log.Errorf("EMR cluster state change reason: code='%s' message=%q", code, message)
+						err = fmt.Errorf("EMR cluster %s terminated with errors: code=%s message=%q",
+							jobFlowSteps.JobflowID, code, message)
+					}
 					if lock != nil && softLock != "" {
 						lock.Unlock()
 					}
