@@ -23,8 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/emr"
 	"github.com/getsentry/sentry-go"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
@@ -52,10 +50,6 @@ const (
 
 	// logRotationWaitSeconds is the time to wait for EMR log files to be rotated to S3
 	logRotationWaitSeconds = 300
-	// maxClusterWaitDuration is the maximum time to wait for a cluster to terminate (14 days)
-	maxClusterWaitDuration = 14 * 24 * time.Hour
-	// clusterPollInterval is the interval between cluster state checks
-	clusterPollInterval = 45 * time.Second
 )
 
 func main() {
@@ -293,7 +287,7 @@ func main() {
 					return exitCodeError(sentryEnabled, err)
 				}
 
-				jobFlowSteps, err := runJobFlowWithSteps(emrCluster, playbookRecord)
+				jobFlowSteps, err := InitJobFlowSteps(*playbookRecord, "", false)
 				if err != nil {
 					if lock != nil && softLock != "" {
 						lock.Unlock()
@@ -301,48 +295,13 @@ func main() {
 					return exitCodeError(sentryEnabled, err)
 				}
 
-				log.Infof("Transient EMR run with jobflow ID [%s] started successfully", jobFlowSteps.JobflowID)
-
-				log.Info("Waiting until cluster is terminated...")
-
-				// Use SDK v2 waiter for cluster termination
-				// Safe type assertion - in production this will always be *emr.Client
-				emrClient, ok := emrCluster.Svc.(*emr.Client)
-				if !ok {
-					if lock != nil && softLock != "" {
-						lock.Unlock()
-					}
-					return exitCodeError(sentryEnabled, fmt.Errorf("failed to create cluster termination waiter: EMR service is not a concrete client"))
-				}
-
-				waiter := emr.NewClusterTerminatedWaiter(emrClient, func(o *emr.ClusterTerminatedWaiterOptions) {
-					o.MinDelay = clusterPollInterval
-					o.MaxDelay = clusterPollInterval
-				})
-
-				err = waiter.Wait(context.Background(),
-					&emr.DescribeClusterInput{
-						ClusterId: aws.String(jobFlowSteps.JobflowID),
-					},
-					maxClusterWaitDuration,
-				)
+				err = runTransientJobFlow(context.Background(), emrCluster, jobFlowSteps)
 				if err != nil {
-					// The terminated waiter only returns a generic "transitioned to Failure" error, so
-					// re-describe the cluster to recover and surface the underlying StateChangeReason.
-					if code, message, derr := emrCluster.fetchStateChangeReason(context.Background(), jobFlowSteps.JobflowID); derr != nil {
-						log.Warnf("could not re-describe cluster to get StateChangeReason: %v", derr)
-					} else if code != "" || message != "" {
-						log.Errorf("EMR cluster state change reason: code='%s' message=%q", code, message)
-						err = fmt.Errorf("EMR cluster %s terminated with errors: code=%s message=%q",
-							jobFlowSteps.JobflowID, code, message)
-					}
 					if lock != nil && softLock != "" {
 						lock.Unlock()
 					}
 					return exitCodeError(sentryEnabled, err)
 				}
-
-				log.Infof("EMR cluster with ID [%s] is terminated successfully", jobFlowSteps.JobflowID)
 
 				failedStepIDs, err := jobFlowSteps.GetFailedStepIDs()
 
@@ -456,35 +415,6 @@ func upWithConfig(clusterRecord *ClusterConfig) (string, error) {
 	}
 
 	return jobflowID, nil
-}
-
-func runJobFlowWithSteps(emrCluster *EmrCluster, playbookRecord *PlaybookConfig) (*JobFlowSteps, error) {
-
-	jobFlowInput, err := emrCluster.GetJobFlowInput(false)
-	if err != nil {
-		return nil, err
-	}
-
-	jobFlowSteps, err := InitJobFlowSteps(*playbookRecord, "", false)
-	if err != nil {
-		return nil, err
-	}
-
-	addJobFlowStepsInput, err := jobFlowSteps.GetJobFlowStepsInput()
-	if err != nil {
-		return nil, err
-	}
-
-	jobFlowInput.Steps = addJobFlowStepsInput.Steps
-
-	jobFlowOutput, err := emrCluster.Svc.RunJobFlow(context.Background(), jobFlowInput)
-	if err != nil {
-		return nil, err
-	}
-
-	jobFlowSteps.JobflowID = *jobFlowOutput.JobFlowId
-
-	return jobFlowSteps, nil
 }
 
 // log the failed steps by printing out the different log files for each failed step
