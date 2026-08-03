@@ -1,3 +1,7 @@
+Version 0.7.9 (2026-08-03)
+--------------------------
+Retry bootstrap failures in transient mode (#103)
+
 Version 0.7.8 (2026-06-08)
 --------------------------
 Bump Go toolchain to 1.25.11 (#101)
