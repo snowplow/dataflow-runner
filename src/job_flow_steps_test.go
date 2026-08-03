@@ -303,3 +303,83 @@ func TestRetrieveStepState_Fail(t *testing.T) {
 	assert.NotNil(err)
 	assert.Equal("Couldn't retrieve step step-id state: emr.DescribeStep: DescribeStep failed", err.Error())
 }
+
+// mockEMRAPIStepStates lists a fixed set of steps and reports each one's state by
+// step ID, so a mixture of terminal and non-terminal steps can be exercised.
+type mockEMRAPIStepStates struct {
+	stepIDs []string
+	states  map[string]types.StepState
+}
+
+func (m *mockEMRAPIStepStates) ListSteps(ctx context.Context, input *emr.ListStepsInput, optFns ...func(*emr.Options)) (*emr.ListStepsOutput, error) {
+	if !strings.HasPrefix(*input.ClusterId, "j-") {
+		return nil, errors.New("ListSteps failed")
+	}
+	steps := make([]types.StepSummary, 0, len(m.stepIDs))
+	for _, id := range m.stepIDs {
+		steps = append(steps, types.StepSummary{Id: aws.String(id)})
+	}
+	return &emr.ListStepsOutput{Steps: steps}, nil
+}
+
+func (m *mockEMRAPIStepStates) DescribeStep(ctx context.Context, input *emr.DescribeStepInput, optFns ...func(*emr.Options)) (*emr.DescribeStepOutput, error) {
+	testTime := time.Date(2019, time.October, 10, 23, 0, 0, 0, time.UTC)
+	return &emr.DescribeStepOutput{
+		Step: &types.Step{
+			Name: aws.String("step"),
+			Id:   input.StepId,
+			Status: &types.StepStatus{
+				State: m.states[*input.StepId],
+				Timeline: &types.StepTimeline{
+					StartDateTime: &testTime,
+					EndDateTime:   &testTime,
+				},
+			},
+		},
+	}, nil
+}
+
+func (m *mockEMRAPIStepStates) RunJobFlow(ctx context.Context, input *emr.RunJobFlowInput, optFns ...func(*emr.Options)) (*emr.RunJobFlowOutput, error) {
+	return nil, nil
+}
+
+func (m *mockEMRAPIStepStates) TerminateJobFlows(ctx context.Context, input *emr.TerminateJobFlowsInput, optFns ...func(*emr.Options)) (*emr.TerminateJobFlowsOutput, error) {
+	return nil, nil
+}
+
+func (m *mockEMRAPIStepStates) DescribeCluster(ctx context.Context, input *emr.DescribeClusterInput, optFns ...func(*emr.Options)) (*emr.DescribeClusterOutput, error) {
+	return nil, nil
+}
+
+func (m *mockEMRAPIStepStates) AddJobFlowSteps(ctx context.Context, input *emr.AddJobFlowStepsInput, optFns ...func(*emr.Options)) (*emr.AddJobFlowStepsOutput, error) {
+	return nil, nil
+}
+
+func TestFailedStepIDs(t *testing.T) {
+	assert := assert.New(t)
+	record, _ := CR.ParsePlaybookRecord([]byte(PlaybookRecord1), nil, "")
+
+	// One step failed, one completed, and one is INTERRUPTED — which
+	// GetFailedStepIDs would wait on forever, since it counts INTERRUPTED as
+	// neither success nor failure. FailedStepIDs must return in a single pass
+	// with just the failed step.
+	svc := &mockEMRAPIStepStates{
+		stepIDs: []string{"s-DONE", "s-FAIL", "s-STUCK"},
+		states: map[string]types.StepState{
+			"s-DONE":  types.StepStateCompleted,
+			"s-FAIL":  types.StepStateFailed,
+			"s-STUCK": types.StepStateInterrupted,
+		},
+	}
+	jfs := &JobFlowSteps{Config: *record, JobflowID: "j-123", IsBlocking: true, EmrSvc: svc}
+
+	failedStepIDs, err := jfs.FailedStepIDs()
+	assert.Nil(err)
+	assert.Equal([]string{"s-FAIL"}, failedStepIDs)
+
+	// an undescribable cluster surfaces the error rather than an empty list
+	jfs = &JobFlowSteps{Config: *record, JobflowID: "nope", IsBlocking: true, EmrSvc: svc}
+	failedStepIDs, err = jfs.FailedStepIDs()
+	assert.NotNil(err)
+	assert.Nil(failedStepIDs)
+}

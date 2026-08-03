@@ -80,14 +80,18 @@ func clusterIsTerminalish(status *types.ClusterStatus) bool {
 			status.State == types.ClusterStateTerminatedWithErrors)
 }
 
-// launchFailureError builds the error for a cluster that never reached RUNNING,
-// naming the state change reason. This is the sole owner of logging that
-// reason: callers must not log it themselves, or an attempt that is about to
-// be retried logs the same event twice.
-func launchFailureError(jobflowID string, status *types.ClusterStatus) error {
+// clusterFailureError builds the error for a cluster the launch wait saw
+// terminate, naming the state change reason. It avoids claiming the cluster
+// failed to launch: a short job can pass through RUNNING between two polls, so
+// this is also reached for a run whose steps ran and failed.
+//
+// This is the sole owner of logging that reason: callers must not log it
+// themselves, or an attempt that is about to be retried logs the same event
+// twice.
+func clusterFailureError(jobflowID string, status *types.ClusterStatus) error {
 	code, message := clusterStateChangeReason(status)
 	log.Errorf("EMR cluster state change reason: code='%s' message=%q", code, message)
-	return fmt.Errorf("EMR cluster %s failed to launch with state %s: code=%s message=%q",
+	return fmt.Errorf("EMR cluster %s failed with state %s: code=%s message=%q",
 		jobflowID, status.State, code, message)
 }
 
@@ -150,6 +154,11 @@ func runTransientAttempt(ctx context.Context, ec *EmrCluster, jfs *JobFlowSteps)
 		// A bare terminal state is not enough to call this success: EMR reports
 		// plain TERMINATED even when the failure happened during bootstrap, so
 		// waitForClusterFinished's nil error cannot be trusted on its own.
+		//
+		// Reaching here does not mean no step ran. A short job can pass through
+		// RUNNING between two polls, so this also catches runs whose steps ran
+		// and failed. Only the reason code distinguishes them, which is why the
+		// retry decision keys on BOOTSTRAP_FAILURE alone.
 		code, message := clusterStateChangeReason(launchStatus)
 		switch {
 		case code == string(types.ClusterStateChangeReasonCodeAllStepsCompleted):
@@ -158,12 +167,12 @@ func runTransientAttempt(ctx context.Context, ec *EmrCluster, jfs *JobFlowSteps)
 			log.Infof("EMR cluster with ID [%s] is terminated successfully", jobflowID)
 			return nil, nil
 		case code != "" || message != "":
-			return launchStatus, launchFailureError(jobflowID, launchStatus)
+			return launchStatus, clusterFailureError(jobflowID, launchStatus)
 		default:
 			// No reason ever surfaced: the failure cannot be classified, so it
 			// must never be retried.
 			if settledErr == nil {
-				settledErr = fmt.Errorf("EMR cluster %s failed to launch with state %s and no state change reason",
+				settledErr = fmt.Errorf("EMR cluster %s failed with state %s and no state change reason",
 					jobflowID, launchStatus.State)
 			}
 			return nil, settledErr

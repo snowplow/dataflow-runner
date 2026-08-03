@@ -297,6 +297,17 @@ func main() {
 
 				err = runTransientJobFlow(context.Background(), emrCluster, jobFlowSteps)
 				if err != nil {
+					// The run failed, but its steps may still have run and failed, so
+					// their logs are worth showing. FailedStepIDs is the non-blocking
+					// form: the cluster is already gone, so a step that never reached
+					// a terminal state must not be waited on. Its own error is
+					// discarded — the failure worth reporting is the one above.
+					if logFailedSteps {
+						failedStepIDs, ferr := jobFlowSteps.FailedStepIDs()
+						if ferr == nil && len(failedStepIDs) > 0 {
+							displayFailedStepsLogs(failedStepIDs, emrPlaybook, jobFlowSteps.JobflowID, vars)
+						}
+					}
 					if lock != nil && softLock != "" {
 						lock.Unlock()
 					}
