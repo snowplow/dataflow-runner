@@ -122,6 +122,61 @@ func mockEmrCluster(clusterRecord ClusterConfig) *EmrCluster {
 	}
 }
 
+// mockEMRAPISequence returns a scripted sequence of cluster states on successive
+// DescribeCluster calls, enabling tests of the waiter path without sleeping.
+type mockEMRAPISequence struct {
+	sequence []types.ClusterState
+	callNum  int
+}
+
+func (m *mockEMRAPISequence) DescribeCluster(ctx context.Context, input *emr.DescribeClusterInput, optFns ...func(*emr.Options)) (*emr.DescribeClusterOutput, error) {
+	if m.callNum >= len(m.sequence) {
+		return nil, errors.New("DescribeCluster sequence exhausted")
+	}
+	state := m.sequence[m.callNum]
+	m.callNum++
+
+	// Build the status based on the state
+	status := &types.ClusterStatus{State: state}
+	if state == types.ClusterStateTerminated {
+		status.StateChangeReason = &types.ClusterStateChangeReason{
+			Code:    types.ClusterStateChangeReasonCodeBootstrapFailure,
+			Message: aws.String("Bootstrap action returned a non-zero return code"),
+		}
+	} else if state == types.ClusterStateTerminatedWithErrors {
+		status.StateChangeReason = &types.ClusterStateChangeReason{
+			Code:    types.ClusterStateChangeReasonCodeValidationError,
+			Message: aws.String("On the master instance, application provisioning failed"),
+		}
+	}
+
+	return &emr.DescribeClusterOutput{
+		Cluster: &types.Cluster{
+			Status: status,
+		},
+	}, nil
+}
+
+func (m *mockEMRAPISequence) RunJobFlow(ctx context.Context, input *emr.RunJobFlowInput, optFns ...func(*emr.Options)) (*emr.RunJobFlowOutput, error) {
+	return nil, errors.New("RunJobFlow not supported by mockEMRAPISequence")
+}
+
+func (m *mockEMRAPISequence) TerminateJobFlows(ctx context.Context, input *emr.TerminateJobFlowsInput, optFns ...func(*emr.Options)) (*emr.TerminateJobFlowsOutput, error) {
+	return nil, errors.New("TerminateJobFlows not supported by mockEMRAPISequence")
+}
+
+func (m *mockEMRAPISequence) AddJobFlowSteps(ctx context.Context, input *emr.AddJobFlowStepsInput, optFns ...func(*emr.Options)) (*emr.AddJobFlowStepsOutput, error) {
+	return nil, errors.New("AddJobFlowSteps not supported by mockEMRAPISequence")
+}
+
+func (m *mockEMRAPISequence) ListSteps(ctx context.Context, input *emr.ListStepsInput, optFns ...func(*emr.Options)) (*emr.ListStepsOutput, error) {
+	return nil, errors.New("ListSteps not supported by mockEMRAPISequence")
+}
+
+func (m *mockEMRAPISequence) DescribeStep(ctx context.Context, input *emr.DescribeStepInput, optFns ...func(*emr.Options)) (*emr.DescribeStepOutput, error) {
+	return nil, errors.New("DescribeStep not supported by mockEMRAPISequence")
+}
+
 var CR, _ = InitConfigResolver()
 
 func TestInitEmrCluster(t *testing.T) {
@@ -560,4 +615,133 @@ func TestGetLocation_Success(t *testing.T) {
 	assert.Nil(err)
 	assert.Equal(s, "")
 	assert.Equal(p, "eu-central-1")
+}
+
+func TestIsBootstrapFailure(t *testing.T) {
+	assert := assert.New(t)
+
+	// a nil status must not be treated as a bootstrap failure, and must not panic
+	assert.False(isBootstrapFailure(nil))
+
+	// a status with no reason at all
+	assert.False(isBootstrapFailure(&types.ClusterStatus{
+		State: types.ClusterStateTerminatedWithErrors,
+	}))
+
+	// a different reason code
+	assert.False(isBootstrapFailure(&types.ClusterStatus{
+		State: types.ClusterStateTerminatedWithErrors,
+		StateChangeReason: &types.ClusterStateChangeReason{
+			Code: types.ClusterStateChangeReasonCodeValidationError,
+		},
+	}))
+
+	assert.True(isBootstrapFailure(&types.ClusterStatus{
+		State: types.ClusterStateTerminatedWithErrors,
+		StateChangeReason: &types.ClusterStateChangeReason{
+			Code: types.ClusterStateChangeReasonCodeBootstrapFailure,
+		},
+	}))
+}
+
+func TestWaitForClusterFinished(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
+	ec := mockEmrCluster(*record)
+
+	// a cleanly terminated cluster succeeds and hands back its status
+	status, err := ec.waitForClusterFinished(ctx, "j-TERMINATED")
+	assert.Nil(err)
+	assert.NotNil(status)
+	assert.Equal(types.ClusterStateTerminated, status.State)
+
+	// TERMINATED_WITH_ERRORS is a failure here, unlike in waitForClusterTerminated,
+	// and the status still comes back so the caller can classify it
+	status, err = ec.waitForClusterFinished(ctx, "j-TERMINATED_WITH_ERRORS")
+	assert.NotNil(err)
+	assert.NotNil(status)
+	assert.Equal(types.ClusterStateTerminatedWithErrors, status.State)
+	assert.Equal(types.ClusterStateChangeReasonCodeValidationError, status.StateChangeReason.Code)
+
+	// an undescribable cluster yields no status at all
+	status, err = ec.waitForClusterFinished(ctx, "nope")
+	assert.NotNil(err)
+	assert.Nil(status)
+}
+
+// TestWaitForClusterReady_WithWaiter tests the waiter path when the cluster
+// is not yet in a ready state, ensuring the waiter construction and post-wait
+// re-describe are exercised without sleeping.
+func TestWaitForClusterReady_WithWaiter(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
+
+	ec := &EmrCluster{
+		Config: *record,
+		Svc: &mockEMRAPISequence{
+			sequence: []types.ClusterState{
+				types.ClusterStateStarting,
+				types.ClusterStateRunning,
+				types.ClusterStateRunning,
+			},
+		},
+	}
+
+	status, err := ec.waitForClusterReady(ctx, "j-test")
+	assert.Nil(err)
+	assert.NotNil(status)
+	assert.Equal(types.ClusterStateRunning, status.State)
+}
+
+// TestWaitForClusterFinished_WithWaiter_Success tests the waiter path when the
+// cluster is running and then terminates cleanly, ensuring waiter construction,
+// waiter.Wait, and post-wait re-describe are exercised without sleeping.
+func TestWaitForClusterFinished_WithWaiter_Success(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
+
+	ec := &EmrCluster{
+		Config: *record,
+		Svc: &mockEMRAPISequence{
+			sequence: []types.ClusterState{
+				types.ClusterStateRunning,
+				types.ClusterStateTerminated,
+				types.ClusterStateTerminated,
+			},
+		},
+	}
+
+	status, err := ec.waitForClusterFinished(ctx, "j-test")
+	assert.Nil(err)
+	assert.NotNil(status)
+	assert.Equal(types.ClusterStateTerminated, status.State)
+}
+
+// TestWaitForClusterFinished_WithWaiter_Failure tests the waiter path when the
+// cluster fails during execution, ensuring the caller receives both the error
+// and the status for classification (the critical branch for transient retries).
+func TestWaitForClusterFinished_WithWaiter_Failure(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
+
+	ec := &EmrCluster{
+		Config: *record,
+		Svc: &mockEMRAPISequence{
+			sequence: []types.ClusterState{
+				types.ClusterStateRunning,
+				types.ClusterStateTerminatedWithErrors,
+				types.ClusterStateTerminatedWithErrors,
+			},
+		},
+	}
+
+	status, err := ec.waitForClusterFinished(ctx, "j-test")
+	assert.NotNil(err)
+	assert.NotNil(status)
+	assert.Equal(types.ClusterStateTerminatedWithErrors, status.State)
+	assert.Equal(types.ClusterStateChangeReasonCodeValidationError, status.StateChangeReason.Code)
 }

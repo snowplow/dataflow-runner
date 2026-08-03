@@ -199,6 +199,33 @@ func (jfs JobFlowSteps) GetStepIDsWithContext(ctx context.Context) ([]string, er
 	return stepIDs, nil
 }
 
+// FailedStepIDs returns the IDs of steps that have already failed, without
+// waiting for any that have not finished.
+//
+// Unlike GetFailedStepIDs it never blocks: that method waits for every step to
+// reach COMPLETED, FAILED or CANCELLED, and a step left in any other state — for
+// instance INTERRUPTED, which is what EMR reports when a cluster dies mid-step —
+// makes it wait indefinitely. This is the safe form to use once the cluster is
+// already gone.
+func (jfs JobFlowSteps) FailedStepIDs() ([]string, error) {
+	return jfs.FailedStepIDsWithContext(context.Background())
+}
+
+// FailedStepIDsWithContext is FailedStepIDs with context support
+func (jfs JobFlowSteps) FailedStepIDsWithContext(ctx context.Context) ([]string, error) {
+	stepIDs, err := jfs.GetStepIDsWithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	_, _, failedStepIDs, _, _, err := jfs.RetrieveStepsStatesWithContext(ctx, stepIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	return failedStepIDs, nil
+}
+
 // RetrieveStepsStates retrieves the states of all the steps for a job flow returning the state
 // of every step as well as information about success or failure for each one
 func (jfs JobFlowSteps) RetrieveStepsStates(stepIDs []string) (int, int, []string, []string, []string, error) {

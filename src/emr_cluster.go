@@ -30,9 +30,27 @@ import (
 )
 
 const (
-	invalidStateSleepSeconds     = 30
+	// clusterPollInterval is how often the SDK waiters re-describe a cluster while
+	// waiting for it to reach a state. Shared by every cluster wait on both the
+	// persistent and transient paths.
+	clusterPollInterval = 30 * time.Second
+	// clusterWaitMaxDuration is the maximum time to wait for a cluster to launch,
+	// and for a cluster we have asked to terminate to do so.
+	clusterWaitMaxDuration = 60 * time.Minute
+	// transientMaxWaitDuration is the maximum time to wait for a transient run's
+	// steps to finish and its cluster to terminate. It dwarfs
+	// clusterWaitMaxDuration because it is bounded by how long the job runs, not
+	// by how long provisioning should take.
+	transientMaxWaitDuration = 14 * 24 * time.Hour
+
+	// bootstrapRetryAttempts is the total number of times a cluster is launched
+	// before giving up on a bootstrap failure, counting the first launch.
+	bootstrapRetryAttempts = 3
+
+	// bootstrapFailureSleepSeconds bounds the random pause between `up`'s
+	// bootstrap-failure retries. Held in seconds rather than as a Duration
+	// because it is passed to rand.Intn.
 	bootstrapFailureSleepSeconds = 300
-	clusterWaitMaxDuration       = 60 * time.Minute
 )
 
 // EMRAPI defines the interface for EMR operations (for mocking in tests)
@@ -114,7 +132,7 @@ func (ec EmrCluster) runJobFlow(ctx context.Context, sleepTime int) (string, err
 	}
 
 	var done = false
-	var retryCount = 3
+	var retryCount = bootstrapRetryAttempts
 	var clusterState string
 	var jobflowID string
 	var reasonCode, reasonMessage string
@@ -140,8 +158,7 @@ func (ec EmrCluster) runJobFlow(ctx context.Context, sleepTime int) (string, err
 			log.Errorf("EMR cluster state change reason: code='%s' message=%q", reasonCode, reasonMessage)
 		}
 
-		if clusterStatus.StateChangeReason != nil &&
-			clusterStatus.StateChangeReason.Code == types.ClusterStateChangeReasonCodeBootstrapFailure {
+		if isBootstrapFailure(clusterStatus) {
 
 			retryCount--
 
@@ -182,6 +199,16 @@ func clusterStateChangeReason(status *types.ClusterStatus) (string, string) {
 	return code, msg
 }
 
+// isBootstrapFailure reports whether a cluster status indicates the cluster
+// terminated because a bootstrap action failed. This is the only termination
+// reason for which relaunching with the same steps attached is safe: bootstrap
+// actions run before any step, so no step can have run.
+func isBootstrapFailure(status *types.ClusterStatus) bool {
+	return status != nil &&
+		status.StateChangeReason != nil &&
+		status.StateChangeReason.Code == types.ClusterStateChangeReasonCodeBootstrapFailure
+}
+
 // fetchStateChangeReason describes the cluster and returns its StateChangeReason code and message.
 // It returns a non-nil error if the cluster cannot be described, or empty strings if no reason is set.
 func (ec EmrCluster) fetchStateChangeReason(ctx context.Context, jobflowID string) (string, string, error) {
@@ -220,8 +247,8 @@ func (ec EmrCluster) waitForClusterReady(ctx context.Context, jobflowID string) 
 	}
 
 	waiter := emr.NewClusterRunningWaiter(ec.Svc, func(o *emr.ClusterRunningWaiterOptions) {
-		o.MinDelay = invalidStateSleepSeconds * time.Second
-		o.MaxDelay = invalidStateSleepSeconds * time.Second
+		o.MinDelay = clusterPollInterval
+		o.MaxDelay = clusterPollInterval
 	})
 
 	waiterErr := waiter.Wait(ctx, input, clusterWaitMaxDuration)
@@ -259,11 +286,59 @@ func (ec EmrCluster) waitForClusterTerminated(ctx context.Context, jobflowID str
 	}
 
 	waiter := emr.NewClusterTerminatedWaiter(ec.Svc, func(o *emr.ClusterTerminatedWaiterOptions) {
-		o.MinDelay = invalidStateSleepSeconds * time.Second
-		o.MaxDelay = invalidStateSleepSeconds * time.Second
+		o.MinDelay = clusterPollInterval
+		o.MaxDelay = clusterPollInterval
 	})
 
 	return waiter.Wait(ctx, input, clusterWaitMaxDuration)
+}
+
+// waitForClusterFinished waits for a transient cluster to finish its steps and
+// terminate, returning the final cluster status so the caller can classify the
+// outcome.
+//
+// It is separate from waitForClusterTerminated, which serves `down`: there the
+// cluster was asked to terminate and terminating with errors is still success.
+// Here TERMINATED_WITH_ERRORS means the run itself failed.
+func (ec EmrCluster) waitForClusterFinished(ctx context.Context, jobflowID string) (*types.ClusterStatus, error) {
+	input := &emr.DescribeClusterInput{ClusterId: aws.String(jobflowID)}
+
+	resp, err := retry.ExponentialWithInterface(3, time.Second, "emr.DescribeCluster", func() (any, error) {
+		return ec.Svc.DescribeCluster(ctx, input)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve immediately if the cluster is already in a terminal state
+	output := resp.(*emr.DescribeClusterOutput)
+	status := output.Cluster.Status
+	switch status.State {
+	case types.ClusterStateTerminated:
+		return status, nil
+	case types.ClusterStateTerminatedWithErrors:
+		return status, fmt.Errorf("EMR cluster %s terminated with errors", jobflowID)
+	}
+
+	waiter := emr.NewClusterTerminatedWaiter(ec.Svc, func(o *emr.ClusterTerminatedWaiterOptions) {
+		o.MinDelay = clusterPollInterval
+		o.MaxDelay = clusterPollInterval
+	})
+
+	waiterErr := waiter.Wait(ctx, input, transientMaxWaitDuration)
+
+	// Re-describe so the caller can classify the outcome; the waiter's own error
+	// says only that it transitioned to a failure state.
+	resp, err = ec.Svc.DescribeCluster(ctx, input)
+	if err != nil {
+		if waiterErr != nil {
+			return nil, waiterErr
+		}
+		return nil, err
+	}
+
+	output = resp.(*emr.DescribeClusterOutput)
+	return output.Cluster.Status, waiterErr
 }
 
 // --- Parameter builders
