@@ -173,15 +173,3 @@ jobs:
           echo ""
           echo "Version \`${{ github.ref_name }}\` is a \`-dev\` tag; Snowman intentionally skips the rollout per the SRE rollout policy. Tests link: ${{ steps.snowman-tests.outputs.workflow-url }}"
         } >> "$GITHUB_STEP_SUMMARY"
-
-    - name: Append Snowman link to GitHub Release notes
-      if: ${{ startsWith(github.ref, 'refs/tags/') && steps.snowman-tests.outputs.workflow-conclusion == 'success' && steps.tag.outputs.is_dev == 'false' }}
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ github.ref_name }}
-        append_body: true
-        body: |
-
-          ---
-          🚀 **Snowman tests + rollout:** ${{ steps.snowman-tests.outputs.workflow-url }}
-          Track the staged rollout in `#pipeline-rollouts` on Slack (~7h end-to-end, with approval gates between cohorts).
