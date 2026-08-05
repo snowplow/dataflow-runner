@@ -71,3 +71,105 @@ jobs:
 
     - name: Publish docker image
       run: make docker-cross-build-publish
+
+  # Post-release QA validation via the Snowman framework.
+  # Guide: Quality Engineering > Guides > "Snowman - CI Hook Guide" (Notion).
+  #
+  # Async model (QA-831 / QA-832): this job waits for the TESTS only (~60-90 min).
+  # Any rollout runs asynchronously on Snowman's side and is an SRE/Data-CAP
+  # concern, so caller CI is red only when tests fail.
+  snowman-tests:
+    # The guide gates on `github.event.repository.private == true` to skip the
+    # public mirror of a private release repo. dataflow-runner has no private
+    # mirror — it is public-only — so that condition would be permanently false
+    # and this job would never run. Gating on the canonical repository instead
+    # keeps the intent (forks must not dispatch into Snowman) while letting the
+    # job actually fire here.
+    if: |
+      github.repository == 'snowplow/dataflow-runner' &&
+      startsWith(github.ref, 'refs/tags/') && (
+        !contains(github.ref_name, '-') ||
+        contains(github.ref_name, '-rc') ||
+        contains(github.ref_name, '-dev')
+      )
+    name: Run Snowman Tests and Rollout
+    runs-on: ubuntu-latest
+    # dataflow-runner builds and publishes the image in a single `release` job,
+    # rather than the separate `deploy_to_docker` job the guide's example names.
+    needs: release
+    strategy:
+      matrix:
+        component:
+          - dataflow_runner
+        # Component tests only, deliberately. dataflow-runner is a CLI binary
+        # invoked by one stack, so it has no multi-component interaction story a
+        # composite would add. The two other suites that stand up the shredder
+        # (components/rdb_loader, composites/collector_warehouse_pipelines) do
+        # NOT pin dataflow_runner_version, so dispatching a release at them would
+        # exercise whatever DS4 defaults to rather than the version being
+        # released — green, and meaningless.
+        test_directory:
+          - dataflow_runner
+
+    steps:
+    - name: Detect tag type (for skip-rollout vs link path)
+      id: tag
+      run: |
+        v="${{ github.ref_name }}"
+        if [[ "$v" =~ -dev ]] || [[ "$v" =~ dev[0-9]+ ]]; then
+          echo "is_dev=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "is_dev=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Run Snowman QA Tests
+      id: snowman-tests
+      uses: the-actions-org/workflow-dispatch@v4
+      with:
+        # The workflow's `name:`, not its filename — the filename form works
+        # today but breaks silently if either side is renamed.
+        workflow: Trigger Snowman Tests
+        repo: snowplow-devops/snowman
+        # Snowman has a "Verify dispatched from main" guard that fails fast on
+        # any other ref.
+        ref: refs/heads/main
+        token: ${{ secrets.GLOBAL_QA_FRAMEWORK_PAT }}
+        inputs: >-
+          {
+            "test_directory": "${{ matrix.test_directory }}",
+            "component": "${{ matrix.component }}",
+            "version": "${{ github.ref_name }}",
+            "dry_run": false,
+            "token": "${{ secrets.GLOBAL_QA_FRAMEWORK_PAT }}"
+          }
+        wait-for-completion: true
+        # Tests only (~60-90 min real-world plus headroom). Never raise this to
+        # cover a rollout: ubuntu-latest runners are capped at 6h by GitHub and
+        # the rollout takes ~7h.
+        wait-for-completion-timeout: 120m
+        display-workflow-run-url: true
+
+    - name: Publish Snowman link to Actions summary
+      if: ${{ steps.snowman-tests.outputs.workflow-conclusion == 'success' && steps.tag.outputs.is_dev == 'false' }}
+      run: |
+        {
+          echo "### 🚀 Snowman tests + rollout dispatched"
+          echo ""
+          echo "| | |"
+          echo "|---|---|"
+          echo "| **Component** | \`${{ matrix.component }}\` |"
+          echo "| **Version**   | \`${{ github.ref_name }}\` |"
+          echo "| **Tests + rollout link** | ${{ steps.snowman-tests.outputs.workflow-url }} |"
+          echo "| **Slack channel** | \`#pipeline-rollouts\` |"
+          echo ""
+          echo "_The rollout itself runs async (~7h). Open the link above and check the run's job summary for a direct rollout URL, or watch \`#pipeline-rollouts\` for cohort progress._"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Note no-rollout (dev tag) in Actions summary
+      if: ${{ steps.snowman-tests.outputs.workflow-conclusion == 'success' && steps.tag.outputs.is_dev == 'true' }}
+      run: |
+        {
+          echo "### ℹ️ Snowman tests passed — no rollout dispatched"
+          echo ""
+          echo "Version \`${{ github.ref_name }}\` is a \`-dev\` tag; Snowman intentionally skips the rollout per the SRE rollout policy. Tests link: ${{ steps.snowman-tests.outputs.workflow-url }}"
+        } >> "$GITHUB_STEP_SUMMARY"
