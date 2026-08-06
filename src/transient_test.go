@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -36,15 +37,31 @@ type mockEMRAPITransient struct {
 	runJobFlowCalls int
 	describeIdx     int
 	terminateCalls  int
+	// lastRunJobFlowOptions is the per-call options the last RunJobFlow resolved
+	// to, so a test can see which retry budget the launch was made with.
+	lastRunJobFlowOptions emr.Options
+	// describeErr, when set, fails every DescribeCluster, standing in for a
+	// cluster whose state we cannot read at all.
+	describeErr error
 }
 
 func (m *mockEMRAPITransient) RunJobFlow(ctx context.Context, input *emr.RunJobFlowInput, optFns ...func(*emr.Options)) (*emr.RunJobFlowOutput, error) {
 	m.runJobFlowCalls++
 	m.describeIdx = 0
+
+	m.lastRunJobFlowOptions = emr.Options{}
+	for _, fn := range optFns {
+		fn(&m.lastRunJobFlowOptions)
+	}
+
 	return &emr.RunJobFlowOutput{JobFlowId: aws.String("j-transient")}, nil
 }
 
 func (m *mockEMRAPITransient) DescribeCluster(ctx context.Context, input *emr.DescribeClusterInput, optFns ...func(*emr.Options)) (*emr.DescribeClusterOutput, error) {
+	if m.describeErr != nil {
+		return nil, m.describeErr
+	}
+
 	script := m.attempts[m.runJobFlowCalls-1]
 	i := m.describeIdx
 	if i >= len(script) {
@@ -403,4 +420,52 @@ func TestRunTransientJobFlow_SucceedsFirstTime(t *testing.T) {
 	err := runTransientJobFlowWithJitter(context.Background(), ec, jfs, 1)
 	assert.Nil(err)
 	assert.Equal(1, svc.runJobFlowCalls)
+}
+
+// TestLaunchDoesNotCarryRaisedRetryBudget guards the reason the raised
+// DescribeCluster retry budget is passed per call rather than set on the shared
+// EMR client.
+//
+// RunJobFlow has no idempotency token, so a launch whose response is lost after
+// AWS has begun creating the cluster cannot be told apart from one that never
+// arrived. Every extra SDK attempt is another chance to create a second cluster,
+// and on this path the playbook's steps are attached to the launch request — so
+// a duplicate reruns the playbook, orphaned, outside the bootstrap-failure
+// reasoning that makes relaunching safe at all.
+func TestLaunchDoesNotCarryRaisedRetryBudget(t *testing.T) {
+	assert := assert.New(t)
+	ec, jfs, svc := transientFixture([][]*types.ClusterStatus{
+		{
+			bareStatus(types.ClusterStateRunning),
+			statusWithReason(types.ClusterStateTerminated, types.ClusterStateChangeReasonCodeAllStepsCompleted, "Steps completed"),
+		},
+	})
+
+	err := runTransientJobFlowWithJitter(context.Background(), ec, jfs, 1)
+	assert.Nil(err)
+	assert.Equal(1, svc.runJobFlowCalls)
+	assert.Zero(svc.lastRunJobFlowOptions.RetryMaxAttempts,
+		"launching must not raise the SDK retry budget: RunJobFlow is not idempotent")
+}
+
+// TestRunTransientAttempt_TerminatesWhenLaunchCannotBeObserved covers the case
+// where the launch cannot be read at all, throttling that outlasts its budget
+// being the way that happens in practice.
+//
+// The run has to be reported as failed — an unclassifiable failure must never be
+// retried, because retrying re-submits the steps — but the cluster must not be
+// left behind. We are about to stop watching it, and left alone it keeps billing
+// and may still run the whole playbook unobserved.
+func TestRunTransientAttempt_TerminatesWhenLaunchCannotBeObserved(t *testing.T) {
+	assert := assert.New(t)
+	ec, jfs, svc := transientFixture([][]*types.ClusterStatus{
+		{bareStatus(types.ClusterStateStarting)},
+	})
+	svc.describeErr = errors.New("DescribeCluster failed")
+
+	launchStatus, err := runTransientAttempt(context.Background(), ec, jfs)
+	assert.NotNil(err)
+	// nil status, so runTransientJobFlow will not treat this as retryable
+	assert.Nil(launchStatus)
+	assert.Equal(1, svc.terminateCalls)
 }

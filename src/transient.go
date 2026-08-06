@@ -118,8 +118,21 @@ func runTransientAttempt(ctx context.Context, ec *EmrCluster, jfs *JobFlowSteps)
 	launchStatus, launchErr := ec.waitForClusterReady(ctx, jobflowID)
 	if launchStatus == nil {
 		// The cluster could not be described at all, so the failure cannot be
-		// classified. Report it without a status: an unclassifiable failure must
-		// never be retried, because retrying re-submits the steps.
+		// classified. Terminate before reporting it: we are about to stop watching
+		// a cluster that we have just been unable to read the state of, and left
+		// alone it keeps billing and may still run the whole playbook unobserved.
+		//
+		// Terminating is safe whatever it was doing. waitForClusterReady only
+		// reaches here without a status if it never saw RUNNING or WAITING, and no
+		// step runs before then; if it was already on its way out, terminating a
+		// terminating cluster does nothing. Best effort — whatever stopped us
+		// describing may well stop us terminating too.
+		if termErr := ec.TerminateJobFlowWithContext(ctx, jobflowID); termErr != nil {
+			log.Warnf("Failed to terminate EMR cluster %s after its launch could not be observed: %v",
+				jobflowID, termErr)
+		}
+		// An unclassifiable failure must never be retried, because retrying
+		// re-submits the steps.
 		return nil, launchErr
 	}
 

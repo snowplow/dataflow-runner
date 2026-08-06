@@ -15,12 +15,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsretry "github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/emr"
 	"github.com/aws/aws-sdk-go-v2/service/emr/types"
@@ -30,10 +32,39 @@ import (
 )
 
 const (
-	// clusterPollInterval is how often the SDK waiters re-describe a cluster while
-	// waiting for it to reach a state. Shared by every cluster wait on both the
-	// persistent and transient paths.
-	clusterPollInterval = 30 * time.Second
+	// launchPollMinDelay and launchPollMaxDelay bound how often the SDK waiters
+	// re-describe a cluster that is coming up, or one we have asked to terminate.
+	//
+	// The two must differ. DescribeCluster is throttled per account and region, so
+	// a fleet of runners shares one budget, and smithy only jitters the poll delay
+	// when the maximum exceeds the minimum (see waiter.ComputeDelay) — with them
+	// equal, every runner polls on the same fixed beat for the life of its
+	// cluster. Spread apart, the delay settles at uniform random across the range,
+	// which both halves the call rate and decorrelates a cohort of runners that a
+	// scheduler started together.
+	launchPollMinDelay = 30 * time.Second
+	launchPollMaxDelay = 90 * time.Second
+	// jobPollMinDelay and jobPollMaxDelay bound the same for a transient run's job
+	// phase, which is far longer and far less urgent: nothing acts on the answer
+	// until the job finishes, so minutes of extra latency cost nothing and the
+	// lower call rate leaves headroom for every other runner in the account.
+	jobPollMinDelay = 60 * time.Second
+	jobPollMaxDelay = 300 * time.Second
+
+	// emrReadRetryMaxAttempts is how many times the SDK itself retries an EMR
+	// read. The default of 3 gives up inside a few hundred milliseconds, which is
+	// not long enough to ride out a burst of ThrottlingExceptions on an account
+	// running many clusters at once.
+	//
+	// It is passed per call rather than set on the client, because the client is
+	// shared with RunJobFlow. See emrReadRetryOptions.
+	emrReadRetryMaxAttempts = 8
+
+	// emrRetryMaxBackoff caps the pause between our own retries. It sits above
+	// the longest interval the current attempt counts reach, so it binds only if
+	// those are raised.
+	emrRetryMaxBackoff = 2 * time.Minute
+
 	// clusterWaitMaxDuration is the maximum time to wait for a cluster to launch,
 	// and for a cluster we have asked to terminate to do so.
 	clusterWaitMaxDuration = 60 * time.Minute
@@ -51,6 +82,39 @@ const (
 	// bootstrap-failure retries. Held in seconds rather than as a Duration
 	// because it is passed to rand.Intn.
 	bootstrapFailureSleepSeconds = 300
+)
+
+// emrThrottleRetryAttempts and emrThrottleRetryBaseDelay govern how long we wait
+// out a throttled EMR read.
+//
+// The budget is deliberately generous. These reads are how a run learns whether
+// it succeeded, so giving up early reports a run whose outcome we merely failed
+// to read as a failed run — and each is issued either while a cluster is already
+// up or once it has gone, so waiting costs nothing that is not already
+// being paid.
+//
+// These attempts sit on top of the SDK's own, so the real tolerance is longer
+// than the sleeps below suggest: the outer sleeps come to three or four minutes,
+// but each attempt beneath them can spend up to emrReadRetryMaxAttempts SDK
+// tries backing off to a 20s ceiling, plus adaptive mode's token waits. Under
+// sustained throttling expect something closer to ten minutes end to end. That
+// is the intended direction — patience over a false failure — but it is a good
+// deal more patience than the numbers here look like on their own.
+//
+// emrRetryAttempts and emrRetryBaseDelay are the budget for everything else, and
+// are deliberately small: a few seconds, matching what these calls had before
+// throttling was ever a concern. They exist because an error that is not a
+// throttle is usually permanent but not always — EMR can briefly fail to
+// recognise a jobflow ID that RunJobFlow has only just returned — and the price
+// of treating that as fatal on the transient path is an abandoned cluster.
+//
+// These are vars rather than consts only so tests can shrink them; nothing in
+// the program reassigns them.
+var (
+	emrThrottleRetryAttempts  = 6
+	emrThrottleRetryBaseDelay = 5 * time.Second
+	emrRetryAttempts          = 3
+	emrRetryBaseDelay         = time.Second
 )
 
 // EMRAPI defines the interface for EMR operations (for mocking in tests)
@@ -77,9 +141,21 @@ func InitEmrCluster(clusterConfig ClusterConfig) (*EmrCluster, error) {
 		return nil, err
 	}
 
+	// Adaptive retry mode adds a client-side rate limiter that slows outgoing
+	// calls once AWS starts throttling us, rather than hammering the same
+	// exhausted budget. DescribeCluster is throttled account-wide, so an account
+	// running many clusters at once sees this well before any single runner is at
+	// fault.
+	//
+	// Note what is deliberately absent: the attempt count stays at the SDK
+	// default of 3. Raising it here would raise it for RunJobFlow too, and see
+	// emrReadRetryOptions for why that is not a trade worth making. Adaptive
+	// mode alone does not change the count — it wraps a standard retryer built
+	// with whatever MaxAttempts it is given.
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion(clusterConfig.Region),
 		config.WithCredentialsProvider(creds),
+		config.WithRetryMode(aws.RetryModeAdaptive),
 	)
 	if err != nil {
 		return nil, err
@@ -223,47 +299,175 @@ func (ec EmrCluster) fetchStateChangeReason(ctx context.Context, jobflowID strin
 	return code, message, nil
 }
 
+// describeOutputStatus unwraps a DescribeCluster response's cluster status,
+// returning nil rather than panicking on a response that carries none.
+func describeOutputStatus(output *emr.DescribeClusterOutput) *types.ClusterStatus {
+	if output == nil || output.Cluster == nil {
+		return nil
+	}
+	return output.Cluster.Status
+}
+
+// isThrottleError reports whether an error is AWS asking us to slow down, as
+// distinct from telling us we asked for something that does not exist. Only the
+// former is worth waiting out. It reads through wrapping, so it still recognises
+// the MaxAttemptsError the SDK returns once its own retries are exhausted.
+func isThrottleError(err error) bool {
+	throttles := awsretry.IsErrorThrottles(awsretry.DefaultThrottles)
+	return throttles.IsErrorThrottle(err) == aws.TrueTernary
+}
+
+// emrReadRetryOptions raises the SDK's own retry budget for a single call. It
+// belongs on reads only, which are safe to repeat.
+//
+// It is applied per call rather than to the client because the client is shared
+// with RunJobFlow, and RunJobFlow has no idempotency token — the EMR API offers
+// none. A launch whose response is lost after AWS has begun creating the cluster
+// is indistinguishable from one that never arrived, so every extra SDK attempt
+// is another chance to create a second cluster. On the transient path the
+// playbook's steps are attached to the launch request, so a second cluster
+// reruns the playbook, and the duplicate is orphaned: we only ever learn the
+// jobflow ID of the response we did receive.
+//
+// That hazard is not new, but it has no business growing to buy DescribeCluster
+// some throttling headroom. Overriding MaxAttempts per call keeps the adaptive
+// retryer intact — AddWithMaxAttempts wraps it rather than replacing it, so the
+// rate limiter still applies.
+//
+// Deliberately absent from the describes the waiters make internally, which
+// reach the client by their own route. Those need no help: a waiter treats an
+// API error as "not there yet" and simply polls again, so a throttled poll costs
+// nothing but the next interval. Giving them a larger budget would only add
+// calls to the budget we are already short of.
+func emrReadRetryOptions(o *emr.Options) {
+	o.RetryMaxAttempts = emrReadRetryMaxAttempts
+}
+
+// emrRetryBackoff is the pause before the next attempt: an exponential doubling
+// of base, jittered upwards by up to half so that runners that were throttled
+// together do not come back together.
+//
+// Capped at emrRetryMaxBackoff. The doubling is unbounded otherwise, and the
+// attempt counts it is driven by are vars that exist to be adjusted — a handful
+// more than are set today would shift well past any interval worth waiting.
+func emrRetryBackoff(base time.Duration, attempt int) time.Duration {
+	// Doubled by iteration rather than by shifting, so that reaching the cap ends
+	// it before a large attempt number can overflow the shift.
+	delay := base
+	for i := 1; i < attempt && delay < emrRetryMaxBackoff; i++ {
+		delay *= 2
+	}
+	if delay > emrRetryMaxBackoff {
+		delay = emrRetryMaxBackoff
+	}
+	return delay + time.Duration(rand.Int63n(int64(delay)))/2
+}
+
+// retryEmrRead runs an EMR read, waiting out a throttled response on the long
+// budget and giving everything else the short one.
+//
+// This is the shared shape behind every EMR read whose failure would otherwise
+// be reported as a failed run. Being told to slow down must not be allowed to
+// masquerade as a run that went wrong.
+//
+// The short budget is what keeps genuinely hopeless answers cheap: a jobflow ID
+// that does not exist, which is what a bad --emr-cluster produces, is reported
+// in seconds rather than sitting in a waiter until it times out. It is not zero,
+// because one non-throttle error does clear on its own — EMR not yet recognising
+// a jobflow ID it has just issued.
+func retryEmrRead[T any](ctx context.Context, label string, f func() (T, error)) (T, error) {
+	var zero T
+
+	for attempt := 1; ; attempt++ {
+		result, err := f()
+		if err == nil {
+			return result, nil
+		}
+
+		// Choose the budget from the error in hand rather than the first one
+		// seen, so that a throttle arriving mid-sequence still gets waited out.
+		attempts, base := emrRetryAttempts, emrRetryBaseDelay
+		throttled := isThrottleError(err)
+		if throttled {
+			attempts, base = emrThrottleRetryAttempts, emrThrottleRetryBaseDelay
+		}
+		if attempt >= attempts {
+			return zero, fmt.Errorf("%s: %w", label, err)
+		}
+
+		sleep := emrRetryBackoff(base, attempt)
+		if throttled {
+			log.Warnf("Throttled calling %s (attempt %d of %d), retrying in %s...",
+				label, attempt, attempts, sleep)
+		} else {
+			log.Warnf("Call to %s failed (attempt %d of %d), retrying in %s: %v",
+				label, attempt, attempts, sleep, err)
+		}
+		select {
+		case <-ctx.Done():
+			return zero, ctx.Err()
+		case <-time.After(sleep):
+		}
+	}
+}
+
+// describeClusterStatus describes a cluster and returns its status.
+func (ec EmrCluster) describeClusterStatus(ctx context.Context, input *emr.DescribeClusterInput) (*types.ClusterStatus, error) {
+	output, err := retryEmrRead(ctx, "emr.DescribeCluster", func() (*emr.DescribeClusterOutput, error) {
+		return ec.Svc.DescribeCluster(ctx, input, emrReadRetryOptions)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	status := describeOutputStatus(output)
+	if status == nil {
+		return nil, fmt.Errorf("EMR cluster %s was described without a status", aws.ToString(input.ClusterId))
+	}
+	return status, nil
+}
+
 // waitForClusterReady waits for the cluster to reach RUNNING or WAITING state using SDK v2 waiter.
 // Returns the cluster status even on failure (needed for bootstrap failure detection).
 func (ec EmrCluster) waitForClusterReady(ctx context.Context, jobflowID string) (*types.ClusterStatus, error) {
 	input := &emr.DescribeClusterInput{ClusterId: aws.String(jobflowID)}
 
 	// Validate cluster exists before starting the waiter
-	resp, err := retry.ExponentialWithInterface(3, time.Second, "emr.DescribeCluster", func() (any, error) {
-		return ec.Svc.DescribeCluster(ctx, input)
-	})
+	status, err := ec.describeClusterStatus(ctx, input)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check if already in a terminal state
-	output := resp.(*emr.DescribeClusterOutput)
-	state := output.Cluster.Status.State
-	if state == types.ClusterStateWaiting || state == types.ClusterStateRunning {
-		return output.Cluster.Status, nil
-	}
-	if state == types.ClusterStateTerminated || state == types.ClusterStateTerminatedWithErrors || state == types.ClusterStateTerminating {
-		return output.Cluster.Status, nil
+	// Check if already in a state the waiter would not carry us past
+	switch status.State {
+	case types.ClusterStateWaiting, types.ClusterStateRunning,
+		types.ClusterStateTerminating, types.ClusterStateTerminated, types.ClusterStateTerminatedWithErrors:
+		return status, nil
 	}
 
 	waiter := emr.NewClusterRunningWaiter(ec.Svc, func(o *emr.ClusterRunningWaiterOptions) {
-		o.MinDelay = clusterPollInterval
-		o.MaxDelay = clusterPollInterval
+		o.MinDelay = launchPollMinDelay
+		o.MaxDelay = launchPollMaxDelay
 	})
 
-	waiterErr := waiter.Wait(ctx, input, clusterWaitMaxDuration)
-
-	// Fetch final cluster status (needed for bootstrap failure detection)
-	resp, err = ec.Svc.DescribeCluster(ctx, input)
-	if err != nil {
-		if waiterErr != nil {
-			return nil, waiterErr
-		}
-		return nil, err
+	// WaitForOutput rather than Wait: it hands back the very DescribeCluster
+	// response that satisfied the acceptor, so a cluster that comes up needs no
+	// further call. Re-describing here instead put one unretried DescribeCluster
+	// on the critical path, fired at the exact moment the waiter resolved — and a
+	// throttled one abandoned a launch that had in fact succeeded, leaving the
+	// cluster running its steps unwatched.
+	output, waiterErr := waiter.WaitForOutput(ctx, input, clusterWaitMaxDuration)
+	if observed := describeOutputStatus(output); observed != nil {
+		return observed, nil
 	}
 
-	output = resp.(*emr.DescribeClusterOutput)
-	return output.Cluster.Status, waiterErr
+	// The waiter returns no output when it errors or times out, so the status has
+	// to be recovered before the caller can classify what happened.
+	status, err = ec.describeClusterStatus(ctx, input)
+	if err != nil {
+		return nil, errors.Join(waiterErr, err)
+	}
+	return status, waiterErr
 }
 
 // waitForClusterTerminated waits for the cluster to terminate using SDK v2 waiter.
@@ -271,23 +475,20 @@ func (ec EmrCluster) waitForClusterTerminated(ctx context.Context, jobflowID str
 	input := &emr.DescribeClusterInput{ClusterId: aws.String(jobflowID)}
 
 	// Validate cluster exists before starting the waiter
-	resp, err := retry.ExponentialWithInterface(3, time.Second, "emr.DescribeCluster", func() (any, error) {
-		return ec.Svc.DescribeCluster(ctx, input)
-	})
+	status, err := ec.describeClusterStatus(ctx, input)
 	if err != nil {
 		return err
 	}
 
 	// Check if already terminated
-	output := resp.(*emr.DescribeClusterOutput)
-	if output.Cluster.Status.State == types.ClusterStateTerminated ||
-		output.Cluster.Status.State == types.ClusterStateTerminatedWithErrors {
+	if status.State == types.ClusterStateTerminated ||
+		status.State == types.ClusterStateTerminatedWithErrors {
 		return nil
 	}
 
 	waiter := emr.NewClusterTerminatedWaiter(ec.Svc, func(o *emr.ClusterTerminatedWaiterOptions) {
-		o.MinDelay = clusterPollInterval
-		o.MaxDelay = clusterPollInterval
+		o.MinDelay = launchPollMinDelay
+		o.MaxDelay = launchPollMaxDelay
 	})
 
 	return waiter.Wait(ctx, input, clusterWaitMaxDuration)
@@ -303,16 +504,12 @@ func (ec EmrCluster) waitForClusterTerminated(ctx context.Context, jobflowID str
 func (ec EmrCluster) waitForClusterFinished(ctx context.Context, jobflowID string) (*types.ClusterStatus, error) {
 	input := &emr.DescribeClusterInput{ClusterId: aws.String(jobflowID)}
 
-	resp, err := retry.ExponentialWithInterface(3, time.Second, "emr.DescribeCluster", func() (any, error) {
-		return ec.Svc.DescribeCluster(ctx, input)
-	})
+	status, err := ec.describeClusterStatus(ctx, input)
 	if err != nil {
 		return nil, err
 	}
 
 	// Resolve immediately if the cluster is already in a terminal state
-	output := resp.(*emr.DescribeClusterOutput)
-	status := output.Cluster.Status
 	switch status.State {
 	case types.ClusterStateTerminated:
 		return status, nil
@@ -321,24 +518,33 @@ func (ec EmrCluster) waitForClusterFinished(ctx context.Context, jobflowID strin
 	}
 
 	waiter := emr.NewClusterTerminatedWaiter(ec.Svc, func(o *emr.ClusterTerminatedWaiterOptions) {
-		o.MinDelay = clusterPollInterval
-		o.MaxDelay = clusterPollInterval
+		o.MinDelay = jobPollMinDelay
+		o.MaxDelay = jobPollMaxDelay
 	})
 
-	waiterErr := waiter.Wait(ctx, input, transientMaxWaitDuration)
-
-	// Re-describe so the caller can classify the outcome; the waiter's own error
-	// says only that it transitioned to a failure state.
-	resp, err = ec.Svc.DescribeCluster(ctx, input)
-	if err != nil {
-		if waiterErr != nil {
-			return nil, waiterErr
-		}
-		return nil, err
+	// As in waitForClusterReady, take the status from the waiter's own output so
+	// that a run which terminated cleanly cannot be turned into a failure by a
+	// throttled re-describe. Unlike there the reason has to be present too, since
+	// that is what the caller classifies on, and EMR does not always have it
+	// attached by the time the cluster reaches TERMINATED.
+	output, waiterErr := waiter.WaitForOutput(ctx, input, transientMaxWaitDuration)
+	if observed := describeOutputStatus(output); observed != nil && observed.StateChangeReason != nil {
+		return observed, nil
 	}
 
-	output = resp.(*emr.DescribeClusterOutput)
-	return output.Cluster.Status, waiterErr
+	// Otherwise the status has to be recovered: the waiter returns no output at
+	// all when it errors or times out.
+	//
+	// A reasonless TERMINATED is deliberately not returned as good enough on its
+	// own here. The caller cannot confirm a run complete without
+	// ALL_STEPS_COMPLETED, so it would fail the run either way — and reporting
+	// why the cluster could not be described says more than the caller's "no
+	// state change reason", which hides that throttling was the cause.
+	status, err = ec.describeClusterStatus(ctx, input)
+	if err != nil {
+		return nil, errors.Join(waiterErr, err)
+	}
+	return status, waiterErr
 }
 
 // --- Parameter builders

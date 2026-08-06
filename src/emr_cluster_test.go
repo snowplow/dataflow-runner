@@ -16,14 +16,27 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/emr"
 	"github.com/aws/aws-sdk-go-v2/service/emr/types"
+	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 )
+
+// TestMain collapses the DescribeCluster backoff for the whole package. Only the
+// delays are shrunk, not the attempt counts: how long the waiting takes is
+// nothing a test wants to sit through, but how many attempts each kind of error
+// is worth is exactly what several of them assert.
+func TestMain(m *testing.M) {
+	emrThrottleRetryBaseDelay = time.Millisecond
+	emrRetryBaseDelay = time.Millisecond
+	os.Exit(m.Run())
+}
 
 type mockEMRAPICluster struct{}
 
@@ -175,6 +188,99 @@ func (m *mockEMRAPISequence) ListSteps(ctx context.Context, input *emr.ListSteps
 
 func (m *mockEMRAPISequence) DescribeStep(ctx context.Context, input *emr.DescribeStepInput, optFns ...func(*emr.Options)) (*emr.DescribeStepOutput, error) {
 	return nil, errors.New("DescribeStep not supported by mockEMRAPISequence")
+}
+
+// describeResult is one scripted DescribeCluster outcome: either a status or an
+// error, never both.
+type describeResult struct {
+	status *types.ClusterStatus
+	err    error
+}
+
+func describeOK(state types.ClusterState) describeResult {
+	return describeResult{status: &types.ClusterStatus{State: state}}
+}
+
+func describeOKWithReason(state types.ClusterState, code types.ClusterStateChangeReasonCode) describeResult {
+	return describeResult{status: &types.ClusterStatus{
+		State:             state,
+		StateChangeReason: &types.ClusterStateChangeReason{Code: code, Message: aws.String("scripted")},
+	}}
+}
+
+// describeThrottled is AWS asking us to slow down: worth waiting out.
+func describeThrottled() describeResult {
+	return describeResult{err: &smithy.GenericAPIError{
+		Code:    "ThrottlingException",
+		Message: "Rate exceeded",
+	}}
+}
+
+// describeUnknownCluster is AWS telling us the jobflow ID does not exist, which
+// is what a bad --emr-cluster on the command line produces. Waiting cannot make
+// it true, so it must fail on the first response.
+func describeUnknownCluster() describeResult {
+	return describeResult{err: &smithy.GenericAPIError{
+		Code:    "InvalidRequestException",
+		Message: "Cluster id 'j-nope' is not valid",
+	}}
+}
+
+// mockEMRAPIScript returns a scripted sequence of DescribeCluster outcomes so a
+// test can place a failure at an exact point in a wait. The last entry repeats
+// once the script runs out, which is how "and throttled from here on" is
+// expressed.
+type mockEMRAPIScript struct {
+	script []describeResult
+	calls  int
+	// lastOptions is the per-call options the last DescribeCluster resolved to,
+	// so tests can see which retry budget the call was made with.
+	lastOptions emr.Options
+}
+
+func (m *mockEMRAPIScript) DescribeCluster(ctx context.Context, input *emr.DescribeClusterInput, optFns ...func(*emr.Options)) (*emr.DescribeClusterOutput, error) {
+	m.lastOptions = emr.Options{}
+	for _, fn := range optFns {
+		fn(&m.lastOptions)
+	}
+
+	i := m.calls
+	if i >= len(m.script) {
+		i = len(m.script) - 1
+	}
+	m.calls++
+
+	result := m.script[i]
+	if result.err != nil {
+		return nil, result.err
+	}
+	return &emr.DescribeClusterOutput{Cluster: &types.Cluster{Status: result.status}}, nil
+}
+
+func (m *mockEMRAPIScript) RunJobFlow(ctx context.Context, input *emr.RunJobFlowInput, optFns ...func(*emr.Options)) (*emr.RunJobFlowOutput, error) {
+	return nil, errors.New("RunJobFlow not supported by mockEMRAPIScript")
+}
+
+func (m *mockEMRAPIScript) TerminateJobFlows(ctx context.Context, input *emr.TerminateJobFlowsInput, optFns ...func(*emr.Options)) (*emr.TerminateJobFlowsOutput, error) {
+	return nil, errors.New("TerminateJobFlows not supported by mockEMRAPIScript")
+}
+
+func (m *mockEMRAPIScript) AddJobFlowSteps(ctx context.Context, input *emr.AddJobFlowStepsInput, optFns ...func(*emr.Options)) (*emr.AddJobFlowStepsOutput, error) {
+	return nil, errors.New("AddJobFlowSteps not supported by mockEMRAPIScript")
+}
+
+func (m *mockEMRAPIScript) ListSteps(ctx context.Context, input *emr.ListStepsInput, optFns ...func(*emr.Options)) (*emr.ListStepsOutput, error) {
+	return nil, errors.New("ListSteps not supported by mockEMRAPIScript")
+}
+
+func (m *mockEMRAPIScript) DescribeStep(ctx context.Context, input *emr.DescribeStepInput, optFns ...func(*emr.Options)) (*emr.DescribeStepOutput, error) {
+	return nil, errors.New("DescribeStep not supported by mockEMRAPIScript")
+}
+
+func scriptedEmrCluster(script ...describeResult) (*EmrCluster, *mockEMRAPIScript) {
+	record, _ := CR.ParseClusterRecord([]byte(ClusterRecord1), nil, "")
+	svc := &mockEMRAPIScript{script: script}
+	return &EmrCluster{Config: *record, Svc: svc}, svc
 }
 
 var CR, _ = InitConfigResolver()
@@ -744,4 +850,212 @@ func TestWaitForClusterFinished_WithWaiter_Failure(t *testing.T) {
 	assert.NotNil(status)
 	assert.Equal(types.ClusterStateTerminatedWithErrors, status.State)
 	assert.Equal(types.ClusterStateChangeReasonCodeValidationError, status.StateChangeReason.Code)
+}
+
+// TestClusterPollDelaysAreJittered guards the property that makes a fleet of
+// runners share the account's DescribeCluster budget: smithy only jitters a
+// waiter's delay when the maximum exceeds the minimum, so collapsing either pair
+// to a single value would silently put every runner back on the same fixed beat.
+func TestClusterPollDelaysAreJittered(t *testing.T) {
+	assert := assert.New(t)
+
+	assert.Less(launchPollMinDelay, launchPollMaxDelay)
+	assert.Less(jobPollMinDelay, jobPollMaxDelay)
+}
+
+// TestWaitForClusterReady_ThrottledOnceClusterIsUp covers the launch-phase half
+// of the throttling failure: the cluster comes up, and every DescribeCluster
+// after that point is throttled. Reading the status from the waiter's own output
+// means there is no such call to throttle, so the launch is still reported as
+// the success it was rather than abandoning a cluster that is running its steps.
+func TestWaitForClusterReady_ThrottledOnceClusterIsUp(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+
+	ec, svc := scriptedEmrCluster(
+		describeOK(types.ClusterStateStarting), // pre-flight
+		describeOK(types.ClusterStateRunning),  // the waiter resolves here
+		describeThrottled(),                    // and everything after is throttled
+	)
+
+	status, err := ec.waitForClusterReady(ctx, "j-test")
+	assert.Nil(err)
+	assert.NotNil(status)
+	assert.Equal(types.ClusterStateRunning, status.State)
+	assert.Equal(2, svc.calls, "no DescribeCluster should be made after the waiter resolves")
+}
+
+// TestWaitForClusterFinished_ThrottledOnceTerminated covers the job-phase half:
+// the cluster terminates cleanly and every DescribeCluster after that is
+// throttled. This is the run that was being reported as failed.
+func TestWaitForClusterFinished_ThrottledOnceTerminated(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+
+	ec, svc := scriptedEmrCluster(
+		describeOK(types.ClusterStateRunning), // pre-flight
+		describeOKWithReason(types.ClusterStateTerminated,
+			types.ClusterStateChangeReasonCodeAllStepsCompleted), // the waiter resolves here
+		describeThrottled(),
+	)
+
+	status, err := ec.waitForClusterFinished(ctx, "j-test")
+	assert.Nil(err)
+	assert.NotNil(status)
+	assert.Equal(types.ClusterStateTerminated, status.State)
+	assert.Equal(types.ClusterStateChangeReasonCodeAllStepsCompleted, status.StateChangeReason.Code)
+	assert.Equal(2, svc.calls, "no DescribeCluster should be made after the waiter resolves")
+}
+
+// TestWaitForClusterFinished_RetriesThrottledDescribe checks the other half of
+// the defence: the describes we do still make ride out a throttled response
+// instead of failing the run on the first one.
+func TestWaitForClusterFinished_RetriesThrottledDescribe(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+
+	ec, svc := scriptedEmrCluster(
+		describeThrottled(),                   // pre-flight, first attempt
+		describeOK(types.ClusterStateRunning), // pre-flight, retried
+		describeOKWithReason(types.ClusterStateTerminated,
+			types.ClusterStateChangeReasonCodeAllStepsCompleted),
+	)
+
+	status, err := ec.waitForClusterFinished(ctx, "j-test")
+	assert.Nil(err)
+	assert.NotNil(status)
+	assert.Equal(types.ClusterStateTerminated, status.State)
+	assert.Equal(3, svc.calls)
+}
+
+// TestWaitForClusterFinished_TerminatedWithoutReason covers a cluster that
+// reaches TERMINATED before EMR has attached its StateChangeReason, where the
+// describe that would recover it cannot get through.
+//
+// The caller cannot confirm a run complete without ALL_STEPS_COMPLETED, so this
+// fails whatever we return. What matters is that the error says why the cluster
+// could not be classified rather than only that it could not be.
+func TestWaitForClusterFinished_TerminatedWithoutReason(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+
+	ec, svc := scriptedEmrCluster(
+		describeOK(types.ClusterStateRunning),    // pre-flight
+		describeOK(types.ClusterStateTerminated), // the waiter resolves, but with no reason
+		describeThrottled(),                      // so the reason cannot be recovered
+	)
+
+	status, err := ec.waitForClusterFinished(ctx, "j-test")
+	assert.NotNil(err)
+	assert.Nil(status)
+	assert.Contains(err.Error(), "ThrottlingException")
+	assert.Greater(svc.calls, 2, "a missing reason is worth re-describing for")
+}
+
+// TestWaitForClusterFinished_ReasonRecoveredByRedescribe is the same case when
+// the re-describe does get through: the recovered reason wins.
+func TestWaitForClusterFinished_ReasonRecoveredByRedescribe(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+
+	ec, _ := scriptedEmrCluster(
+		describeOK(types.ClusterStateRunning),
+		describeOK(types.ClusterStateTerminated),
+		describeOKWithReason(types.ClusterStateTerminated,
+			types.ClusterStateChangeReasonCodeAllStepsCompleted),
+	)
+
+	status, err := ec.waitForClusterFinished(ctx, "j-test")
+	assert.Nil(err)
+	assert.NotNil(status)
+	assert.Equal(types.ClusterStateChangeReasonCodeAllStepsCompleted, status.StateChangeReason.Code)
+}
+
+// TestWaitForClusterFinished_SustainedThrottlingStillFails checks that the
+// tolerance has a limit: throttling that outlasts the retry budget, with no
+// status ever observed, is reported rather than guessed at.
+func TestWaitForClusterFinished_SustainedThrottlingStillFails(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+
+	ec, svc := scriptedEmrCluster(describeThrottled())
+
+	status, err := ec.waitForClusterFinished(ctx, "j-test")
+	assert.NotNil(err)
+	assert.Nil(status)
+	assert.Contains(err.Error(), "ThrottlingException")
+	assert.Equal(emrThrottleRetryAttempts, svc.calls)
+}
+
+// TestDescribeCarriesRaisedRetryBudget checks that the raised SDK retry budget
+// reaches the describes that need it. Its counterpart is
+// TestLaunchDoesNotCarryRaisedRetryBudget in transient_test.go: the budget is
+// passed per call precisely so that it does not reach RunJobFlow.
+func TestDescribeCarriesRaisedRetryBudget(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+
+	ec, svc := scriptedEmrCluster(describeOK(types.ClusterStateRunning))
+
+	_, err := ec.waitForClusterReady(ctx, "j-test")
+	assert.Nil(err)
+	assert.Equal(emrReadRetryMaxAttempts, svc.lastOptions.RetryMaxAttempts)
+}
+
+// TestDescribeSurvivesTransientNonThrottleError covers the reason a non-throttle
+// error gets a few attempts rather than none. EMR can briefly fail to recognise
+// a jobflow ID that RunJobFlow has only just returned, and on the transient path
+// treating that as fatal abandons a cluster that is about to run the playbook.
+func TestDescribeSurvivesTransientNonThrottleError(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+
+	ec, svc := scriptedEmrCluster(
+		describeUnknownCluster(),
+		describeOK(types.ClusterStateRunning),
+	)
+
+	status, err := ec.waitForClusterReady(ctx, "j-test")
+	assert.Nil(err)
+	assert.NotNil(status)
+	assert.Equal(types.ClusterStateRunning, status.State)
+	assert.Equal(2, svc.calls)
+}
+
+// TestWaitForClusterFailsFastOnUnknownCluster covers the reason the existence
+// check runs ahead of each waiter in the first place: a jobflow ID that does not
+// exist should be reported in seconds, not waited on. Nothing about that answer
+// improves with waiting, so unlike a throttle it gets only the short budget and
+// never reaches the waiter.
+func TestWaitForClusterFailsFastOnUnknownCluster(t *testing.T) {
+	assert := assert.New(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		call func(*EmrCluster) error
+	}{
+		{"ready", func(ec *EmrCluster) error {
+			_, err := ec.waitForClusterReady(ctx, "j-nope")
+			return err
+		}},
+		{"finished", func(ec *EmrCluster) error {
+			_, err := ec.waitForClusterFinished(ctx, "j-nope")
+			return err
+		}},
+		{"terminated", func(ec *EmrCluster) error {
+			return ec.waitForClusterTerminated(ctx, "j-nope")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ec, svc := scriptedEmrCluster(describeUnknownCluster())
+
+			err := tc.call(ec)
+			assert.NotNil(err)
+			assert.Contains(err.Error(), "is not valid")
+			assert.Equal(emrRetryAttempts, svc.calls,
+				"an unknown cluster must not consume the throttle budget")
+			assert.Less(emrRetryAttempts, emrThrottleRetryAttempts)
+		})
+	}
 }
