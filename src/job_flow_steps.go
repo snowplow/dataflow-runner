@@ -43,9 +43,19 @@ func InitJobFlowSteps(playbookConfig PlaybookConfig, jobflowID string, isAsync b
 		return nil, err
 	}
 
+	// Adaptive retry mode, for the reason InitEmrCluster uses it: this client
+	// shares the account-wide EMR budget with every other runner, and the reads
+	// below carry a raised attempt count that is worth rate-limiting rather than
+	// spending all at once.
+	//
+	// As there, the attempt count itself stays at the SDK default here and is
+	// raised per read. AddJobFlowSteps goes through this client, and it is no more
+	// idempotent than RunJobFlow — a retried add whose response was merely lost
+	// submits the playbook's steps twice onto a live cluster.
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion(playbookConfig.Region),
 		config.WithCredentialsProvider(creds),
+		config.WithRetryMode(aws.RetryModeAdaptive),
 	)
 	if err != nil {
 		return nil, err
@@ -184,14 +194,16 @@ func (jfs JobFlowSteps) GetStepIDsWithContext(ctx context.Context) ([]string, er
 		ClusterId: aws.String(jfs.JobflowID),
 	}
 
-	resp, err := retry.ExponentialWithInterface(3, time.Second, "emr.ListSteps", func() (any, error) {
-		return jfs.EmrSvc.ListSteps(ctx, listStepsInput)
+	// retryEmrCall rather than a plain retry: this call is on the transient
+	// success path, where its error is returned to main and fails the whole run.
+	// A throttled ListSteps must not turn a completed run into a failed one.
+	listStepsOutput, err := retryEmrCall(ctx, "emr.ListSteps", func() (*emr.ListStepsOutput, error) {
+		return jfs.EmrSvc.ListSteps(ctx, listStepsInput, emrIdempotentRetryOptions)
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	listStepsOutput := resp.(*emr.ListStepsOutput)
 	for _, step := range listStepsOutput.Steps {
 		stepIDs = append(stepIDs, *step.Id)
 	}
@@ -271,14 +283,15 @@ func (jfs JobFlowSteps) RetrieveStepStateWithContext(ctx context.Context, stepID
 		ClusterId: aws.String(jfs.JobflowID),
 		StepId:    aws.String(stepID),
 	}
-	resp, err := retry.ExponentialWithInterface(3, time.Second, "emr.DescribeStep", func() (any, error) {
-		return jfs.EmrSvc.DescribeStep(ctx, describeStepInput)
+	// As in GetStepIDsWithContext, this read decides whether a run is reported as
+	// having succeeded, so a throttle must not be allowed to fail it.
+	dso, err := retryEmrCall(ctx, "emr.DescribeStep", func() (*emr.DescribeStepOutput, error) {
+		return jfs.EmrSvc.DescribeStep(ctx, describeStepInput, emrIdempotentRetryOptions)
 	})
 	if err != nil {
 		return "", nil, fmt.Errorf("Couldn't retrieve step %s state: %w", stepID, err)
 	}
 
-	dso := resp.(*emr.DescribeStepOutput)
 	logs := make([]string, 0)
 	logMessageHead := fmt.Sprintf("Step '%s' with id '%s'", *dso.Step.Name, *dso.Step.Id)
 

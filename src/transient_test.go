@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/emr"
 	"github.com/aws/aws-sdk-go-v2/service/emr/types"
+	"github.com/aws/smithy-go"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -36,15 +37,47 @@ type mockEMRAPITransient struct {
 	runJobFlowCalls int
 	describeIdx     int
 	terminateCalls  int
+	// lastRunJobFlowOptions is the per-call options the last RunJobFlow resolved
+	// to, so a test can see which retry budget the launch was made with.
+	lastRunJobFlowOptions emr.Options
+	// throttleFromDescribe, when non-zero, throttles every DescribeCluster from
+	// that call onward (0-based), so a test can put a recovery describe beyond its
+	// budget without disturbing the polls before it.
+	throttleFromDescribe int
+	// describeUnreadable, when set, answers every DescribeCluster with a response
+	// carrying no cluster at all.
+	//
+	// This stands in for a cluster whose state cannot be read. It is used in
+	// preference to returning an error because the waiters treat an error as "not
+	// there yet" and poll again, so an always-erroring mock would sit in the
+	// waiter for clusterWaitMaxDuration. An empty response fails the waiter's
+	// acceptor immediately and then defeats the recovery describe, reaching the
+	// same nil-status outcome without the wait.
+	describeUnreadable bool
 }
 
 func (m *mockEMRAPITransient) RunJobFlow(ctx context.Context, input *emr.RunJobFlowInput, optFns ...func(*emr.Options)) (*emr.RunJobFlowOutput, error) {
 	m.runJobFlowCalls++
 	m.describeIdx = 0
+
+	m.lastRunJobFlowOptions = emr.Options{}
+	for _, fn := range optFns {
+		fn(&m.lastRunJobFlowOptions)
+	}
+
 	return &emr.RunJobFlowOutput{JobFlowId: aws.String("j-transient")}, nil
 }
 
 func (m *mockEMRAPITransient) DescribeCluster(ctx context.Context, input *emr.DescribeClusterInput, optFns ...func(*emr.Options)) (*emr.DescribeClusterOutput, error) {
+	if m.describeUnreadable {
+		return &emr.DescribeClusterOutput{}, nil
+	}
+
+	if m.throttleFromDescribe > 0 && m.describeIdx >= m.throttleFromDescribe {
+		m.describeIdx++
+		return nil, &smithy.GenericAPIError{Code: "ThrottlingException", Message: "Rate exceeded"}
+	}
+
 	script := m.attempts[m.runJobFlowCalls-1]
 	i := m.describeIdx
 	if i >= len(script) {
@@ -403,4 +436,88 @@ func TestRunTransientJobFlow_SucceedsFirstTime(t *testing.T) {
 	err := runTransientJobFlowWithJitter(context.Background(), ec, jfs, 1)
 	assert.Nil(err)
 	assert.Equal(1, svc.runJobFlowCalls)
+}
+
+// TestLaunchDoesNotCarryRaisedRetryBudget guards the reason the raised
+// DescribeCluster retry budget is passed per call rather than set on the shared
+// EMR client.
+//
+// RunJobFlow has no idempotency token, so a launch whose response is lost after
+// AWS has begun creating the cluster cannot be told apart from one that never
+// arrived. Every extra SDK attempt is another chance to create a second cluster,
+// and on this path the playbook's steps are attached to the launch request — so
+// a duplicate reruns the playbook, orphaned, outside the bootstrap-failure
+// reasoning that makes relaunching safe at all.
+func TestLaunchDoesNotCarryRaisedRetryBudget(t *testing.T) {
+	assert := assert.New(t)
+	ec, jfs, svc := transientFixture([][]*types.ClusterStatus{
+		{
+			bareStatus(types.ClusterStateRunning),
+			statusWithReason(types.ClusterStateTerminated, types.ClusterStateChangeReasonCodeAllStepsCompleted, "Steps completed"),
+		},
+	})
+
+	err := runTransientJobFlowWithJitter(context.Background(), ec, jfs, 1)
+	assert.Nil(err)
+	assert.Equal(1, svc.runJobFlowCalls)
+	assert.Zero(svc.lastRunJobFlowOptions.RetryMaxAttempts,
+		"launching must not raise the SDK retry budget: RunJobFlow is not idempotent")
+}
+
+// TestRunTransientAttempt_LeavesUnreadableLaunchAlone covers a launch that
+// cannot be read at all, throttling that outlasts its budget being the way that
+// happens in practice.
+//
+// The run is reported as failed, and must not be retried: an unclassifiable
+// failure could have got as far as running a step. But the cluster is left
+// alone. Terminating it was tried and reverted — live testing showed it killing
+// a cluster five minutes into a step, leaving half its output written. Not
+// having observed RUNNING says nothing about whether the cluster reached it.
+func TestRunTransientAttempt_LeavesUnreadableLaunchAlone(t *testing.T) {
+	assert := assert.New(t)
+	ec, jfs, svc := transientFixture([][]*types.ClusterStatus{
+		{bareStatus(types.ClusterStateStarting)},
+	})
+	svc.describeUnreadable = true
+
+	launchStatus, err := runTransientAttempt(context.Background(), ec, jfs)
+	assert.NotNil(err)
+	// nil status, so runTransientJobFlow will not treat this as retryable
+	assert.Nil(launchStatus)
+	assert.Zero(svc.terminateCalls,
+		"a cluster we cannot read may be mid-step; killing it loses partial output")
+}
+
+// TestRunTransientAttempt_SettleDoesNotClobberBootstrapFailure guards an
+// invariant that is invisible where it is broken and only shows up two frames
+// later, as a bootstrap failure that never got relaunched.
+//
+// The settle branch replaces the launch status with the settled one. That is
+// only ever meant to be an upgrade — a reasonless TERMINATING becoming a
+// reasoned TERMINATED — but waitForClusterFinished can now hand back a reasonless
+// TERMINATED of its own when its recovery describe is throttled out, and a
+// bootstrap failure often presents as plain TERMINATED. Overwriting
+// unconditionally loses the one code the retry decision keys on.
+func TestRunTransientAttempt_SettleDoesNotClobberBootstrapFailure(t *testing.T) {
+	assert := assert.New(t)
+
+	ec, jfs, svc := transientFixture([][]*types.ClusterStatus{
+		{
+			// the launch waiter resolves on TERMINATED, then its recovery describe
+			// supplies the reason
+			statusWithReason(types.ClusterStateTerminated, types.ClusterStateChangeReasonCodeBootstrapFailure, "Bootstrap action returned a non-zero return code"),
+			statusWithReason(types.ClusterStateTerminated, types.ClusterStateChangeReasonCodeBootstrapFailure, "Bootstrap action returned a non-zero return code"),
+			// the settle waiter then resolves on a TERMINATED with no reason yet
+			bareStatus(types.ClusterStateTerminated),
+		},
+	})
+	// ...and its recovery describe, which would have supplied the reason a second
+	// time, is throttled past its budget
+	svc.throttleFromDescribe = 3
+
+	launchStatus, err := runTransientAttempt(context.Background(), ec, jfs)
+	assert.NotNil(err)
+	assert.True(isBootstrapFailure(launchStatus),
+		"the reason must survive the settle branch, or the relaunch never happens")
+	assert.Contains(err.Error(), "BOOTSTRAP_FAILURE")
 }

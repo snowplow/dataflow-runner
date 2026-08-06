@@ -63,21 +63,12 @@ func launchTransientCluster(ctx context.Context, ec *EmrCluster, jfs *JobFlowSte
 	return *resp.(*emr.RunJobFlowOutput).JobFlowId, nil
 }
 
-// clusterIsUp reports whether the cluster reached a state in which its steps can
-// run.
-func clusterIsUp(status *types.ClusterStatus) bool {
-	return status != nil &&
-		(status.State == types.ClusterStateRunning || status.State == types.ClusterStateWaiting)
-}
-
-// clusterIsTerminalish reports whether the cluster is on its way out or already
-// gone. A status that is neither this nor clusterIsUp means the cluster is still
-// coming up, which is what the launch wait returns when it times out.
-func clusterIsTerminalish(status *types.ClusterStatus) bool {
-	return status != nil &&
-		(status.State == types.ClusterStateTerminating ||
-			status.State == types.ClusterStateTerminated ||
-			status.State == types.ClusterStateTerminatedWithErrors)
+// warnClusterLeftUnwatched records that we have stopped watching a transient
+// cluster we could not read. It is not terminated — see runTransientAttempt for
+// why — so the only trace of it is this line and the jobflow ID it names.
+func warnClusterLeftUnwatched(jobflowID string) {
+	log.Warnf("EMR cluster %s could not be observed and is being left to run unwatched; "+
+		"it has no steps left to submit and will terminate itself", jobflowID)
 }
 
 // clusterFailureError builds the error for a cluster the launch wait saw
@@ -117,9 +108,21 @@ func runTransientAttempt(ctx context.Context, ec *EmrCluster, jfs *JobFlowSteps)
 
 	launchStatus, launchErr := ec.waitForClusterReady(ctx, jobflowID)
 	if launchStatus == nil {
-		// The cluster could not be described at all, so the failure cannot be
-		// classified. Report it without a status: an unclassifiable failure must
-		// never be retried, because retrying re-submits the steps.
+		// The cluster could not be read at all, so the failure cannot be
+		// classified, and it must never be retried: retrying re-submits the steps.
+		//
+		// The cluster is deliberately left alone. It is tempting to terminate it —
+		// we are about to stop watching something that keeps billing — but nothing
+		// here rules out its steps already running. Not observing RUNNING is a
+		// statement about our visibility, not about the cluster, and by the time
+		// the reads have exhausted their budget a cluster launched minutes ago may
+		// well be mid-step. Killing it then leaves half-written output for the next
+		// run to reason about, which is worse than an unwatched cluster that
+		// finishes the playbook and self-terminates on its own.
+		//
+		// The launch-timeout branch below does terminate, and safely, because there
+		// we have a status and can see the cluster never came up.
+		warnClusterLeftUnwatched(jobflowID)
 		return nil, launchErr
 	}
 
@@ -129,8 +132,12 @@ func runTransientAttempt(ctx context.Context, ec *EmrCluster, jfs *JobFlowSteps)
 			// waitForClusterReady returns a non-terminal status alongside its
 			// error. Left alone the cluster keeps billing, and may still come up
 			// and run the steps after we have reported failure. No step can have
-			// run yet, so terminating is safe.
-			if termErr := ec.TerminateJobFlowWithContext(ctx, jobflowID); termErr != nil {
+			// run yet, so terminating is safe. The no-wait form, since this path
+			// has already spent clusterWaitMaxDuration in the launch waiter and
+			// should not spend another watching the teardown — though a throttled
+			// terminate can now retry for minutes before reporting that it failed,
+			// so "no wait" bounds the success case rather than every case.
+			if termErr := ec.TerminateJobFlowNoWait(ctx, jobflowID); termErr != nil {
 				log.Warnf("Failed to terminate EMR cluster %s after launch timeout: %v", jobflowID, termErr)
 			}
 			if launchErr == nil {
@@ -147,7 +154,17 @@ func runTransientAttempt(ctx context.Context, ec *EmrCluster, jfs *JobFlowSteps)
 		// TERMINATING may not carry its StateChangeReason yet, so wait for the
 		// terminal state and classify from that.
 		settled, settledErr := ec.waitForClusterFinished(ctx, jobflowID)
-		if settled != nil {
+
+		// Only ever an upgrade. Take the settled status when it carries the reason
+		// the launch status lacked, or when neither has one and it at least names
+		// the state the cluster actually reached — never the reverse.
+		//
+		// waitForClusterFinished can hand back a reasonless TERMINATED when its own
+		// recovery describe was throttled out, and a bootstrap failure often
+		// presents as plain TERMINATED, which is that waiter's success acceptor.
+		// Overwriting unconditionally would replace a BOOTSTRAP_FAILURE with
+		// nothing, and the retry decision below keys on exactly that.
+		if settled != nil && (settled.StateChangeReason != nil || launchStatus.StateChangeReason == nil) {
 			launchStatus = settled
 		}
 
@@ -188,6 +205,13 @@ func runTransientAttempt(ctx context.Context, ec *EmrCluster, jfs *JobFlowSteps)
 			log.Errorf("EMR cluster state change reason: code='%s' message=%q", code, message)
 			return nil, fmt.Errorf("EMR cluster %s terminated with errors: code=%s message=%q",
 				jobflowID, code, message)
+		}
+		if finalStatus == nil {
+			// No status at all: the run is reported failed without our knowing what
+			// the cluster did, and it may still be working through the playbook. Say
+			// so, as the launch path does — otherwise the only record of a cluster
+			// nobody is watching is an error that does not mention it.
+			warnClusterLeftUnwatched(jobflowID)
 		}
 		return nil, err
 	}
