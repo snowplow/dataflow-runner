@@ -1096,19 +1096,35 @@ func TestBlindTrackerGivesUp(t *testing.T) {
 	assert.False(b.observe(t0.Add(2*maxBlindDuration), boom, true).giveUp)
 }
 
-// TestWarnWhileBlindPassesTheDecisionThrough checks the wrapper only observes:
-// the waiter's own verdict, including its error, must reach it unaltered.
-func TestWarnWhileBlindPassesTheDecisionThrough(t *testing.T) {
+// TestPollThroughBlindnessOwnsTheErrorDecision pins the behaviour the whole fix
+// rests on, and which the SDK stopped providing in service/emr v1.47.5: a poll
+// that failed means ask again, not end the wait.
+//
+// Deciding that here rather than deferring to the generated acceptor is what
+// makes the fix survive a dependency bump. The acceptor is still consulted when
+// there is a response, because which states resolve a wait is its business.
+func TestPollThroughBlindnessOwnsTheErrorDecision(t *testing.T) {
 	assert := assert.New(t)
 
+	innerCalls := 0
 	inner := func(ctx context.Context, in *emr.DescribeClusterInput, out *emr.DescribeClusterOutput, err error) (bool, error) {
-		return true, errors.New("verdict")
+		innerCalls++
+		return false, errors.New("acceptor verdict")
 	}
 
+	// A failed poll keeps the wait going, whatever the acceptor would have said.
 	throttled := &smithy.GenericAPIError{Code: "ThrottlingException", Message: "Rate exceeded"}
-	retryable, err := warnWhileBlind("j-test", inner)(context.Background(), nil, nil, throttled)
+	retryable, err := pollThroughBlindness("j-test", inner)(context.Background(), nil, nil, throttled)
 	assert.True(retryable)
-	assert.EqualError(err, "verdict")
+	assert.Nil(err)
+	assert.Zero(innerCalls, "an API error is not the acceptor's decision to make")
+
+	// A response is, and its verdict — including a refusal to keep waiting —
+	// reaches the caller unaltered.
+	retryable, err = pollThroughBlindness("j-test", inner)(context.Background(), nil, nil, nil)
+	assert.False(retryable)
+	assert.EqualError(err, "acceptor verdict")
+	assert.Equal(1, innerCalls)
 }
 
 // TestBlindTrackerGivesUpOnNonThrottleErrors covers the escape hatch. A waiter

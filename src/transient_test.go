@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -44,16 +45,9 @@ type mockEMRAPITransient struct {
 	// that call onward (0-based), so a test can put a recovery describe beyond its
 	// budget without disturbing the polls before it.
 	throttleFromDescribe int
-	// describeUnreadable, when set, answers every DescribeCluster with a response
-	// carrying no cluster at all.
-	//
-	// This stands in for a cluster whose state cannot be read. It is used in
-	// preference to returning an error because the waiters treat an error as "not
-	// there yet" and poll again, so an always-erroring mock would sit in the
-	// waiter for clusterWaitMaxDuration. An empty response fails the waiter's
-	// acceptor immediately and then defeats the recovery describe, reaching the
-	// same nil-status outcome without the wait.
-	describeUnreadable bool
+	// describeErr, when set, fails every DescribeCluster with it, standing in for a
+	// cluster whose state cannot be read at all.
+	describeErr error
 }
 
 func (m *mockEMRAPITransient) RunJobFlow(ctx context.Context, input *emr.RunJobFlowInput, optFns ...func(*emr.Options)) (*emr.RunJobFlowOutput, error) {
@@ -69,8 +63,8 @@ func (m *mockEMRAPITransient) RunJobFlow(ctx context.Context, input *emr.RunJobF
 }
 
 func (m *mockEMRAPITransient) DescribeCluster(ctx context.Context, input *emr.DescribeClusterInput, optFns ...func(*emr.Options)) (*emr.DescribeClusterOutput, error) {
-	if m.describeUnreadable {
-		return &emr.DescribeClusterOutput{}, nil
+	if m.describeErr != nil {
+		return nil, m.describeErr
 	}
 
 	if m.throttleFromDescribe > 0 && m.describeIdx >= m.throttleFromDescribe {
@@ -475,12 +469,21 @@ func TestLaunchDoesNotCarryRaisedRetryBudget(t *testing.T) {
 // having observed RUNNING says nothing about whether the cluster reached it.
 func TestRunTransientAttempt_LeavesUnreadableLaunchAlone(t *testing.T) {
 	assert := assert.New(t)
+	// An already-cancelled context stands in for the bound expiring, as in the
+	// launch-timeout test: the mock ignores ctx and keeps failing, the waiter's
+	// inter-poll wait sees the cancellation, and the recovery describe hits it too
+	// — so waitForClusterReady returns no status, which is the branch under test,
+	// without any real waiting and without depending on how the SDK's acceptors
+	// treat an odd response.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
 	ec, jfs, svc := transientFixture([][]*types.ClusterStatus{
 		{bareStatus(types.ClusterStateStarting)},
 	})
-	svc.describeUnreadable = true
+	svc.describeErr = errors.New("DescribeCluster failed")
 
-	launchStatus, err := runTransientAttempt(context.Background(), ec, jfs)
+	launchStatus, err := runTransientAttempt(ctx, ec, jfs)
 	assert.NotNil(err)
 	// nil status, so runTransientJobFlow will not treat this as retryable
 	assert.Nil(launchStatus)

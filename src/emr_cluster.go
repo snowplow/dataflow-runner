@@ -76,6 +76,11 @@ const (
 	// is roughly three to five minutes on the launch waiter and ten to twenty on
 	// the job one — the same asymmetry the poll intervals already have, for the
 	// same reason.
+	//
+	// It raises the bar rather than clearing it. A run that succeeds can still
+	// warn, and should: live testing under a saturated account budget saw one on
+	// the job waiter after seven minutes of unbroken blindness, and that is the
+	// signal this exists for. What it stops is two blind polls being enough.
 	blindWarnAfterPolls = 5
 	blindWarnEveryPolls = 5
 
@@ -493,17 +498,24 @@ func (b *blindTracker) observe(now time.Time, err error, mightClear bool) blindS
 // waiters take the same shape.
 type waiterRetryable func(context.Context, *emr.DescribeClusterInput, *emr.DescribeClusterOutput, error) (bool, error)
 
-// warnWhileBlind wraps a waiter's decision so that a sustained inability to read
-// the cluster becomes visible, without disturbing the decision itself.
+// pollThroughBlindness wraps a waiter's per-poll decision, and owns what happens
+// when a poll fails.
 //
-// A waiter treats an API error as "not there yet" and polls again. That is what
-// stops a throttled poll failing a run, and it is why a throttled launch phase is
-// silent — which is right when the run goes on to succeed. But it also means a
-// cluster we cannot read at all produces no output for the life of the wait, up
-// to an hour on the launch path, and silence is indistinguishable from a hung
-// process. So: nothing for the occasional failure, a warning once it has gone on
-// long enough to be worth acting on.
-func warnWhileBlind(jobflowID string, inner waiterRetryable) waiterRetryable {
+// A failed poll that might clear means "not there yet, ask again" — which is the
+// behaviour the whole fix rests on, and it is deliberately ours rather than the
+// SDK's. Its generated acceptors used to reach the same conclusion by falling
+// through to (true, nil) on an API error, but from service/emr v1.47.5 they end
+// with (false, err) instead, which aborts the wait on the very first throttled
+// poll. Borrowing that behaviour meant a routine dependency bump would silently
+// restore the incident. The acceptors decide which cluster *states* resolve a
+// wait, so they are consulted only when there is a response to inspect.
+//
+// The rest is narration and bounds. A cluster we cannot read at all produces no
+// output for the life of the wait, up to an hour on the launch path, and silence
+// is indistinguishable from a hung process — so nothing for the occasional
+// failure, a warning once it has gone on long enough to act on, and an end to the
+// wait when it is either hopeless or has run past maxBlindDuration.
+func pollThroughBlindness(jobflowID string, inner waiterRetryable) waiterRetryable {
 	var tracker blindTracker
 
 	return func(ctx context.Context, in *emr.DescribeClusterInput, out *emr.DescribeClusterOutput, err error) (bool, error) {
@@ -522,6 +534,11 @@ func warnWhileBlind(jobflowID string, inner waiterRetryable) waiterRetryable {
 				jobflowID, state.blindFor.Round(time.Second), err)
 		case state.recovered:
 			log.Infof("EMR cluster %s is describable again", jobflowID)
+		}
+
+		if err != nil {
+			// Ask again. Not the acceptor's call — see above.
+			return true, nil
 		}
 
 		return inner(ctx, in, out, err)
@@ -678,7 +695,7 @@ func (ec EmrCluster) waitForClusterReady(ctx context.Context, jobflowID string) 
 	waiter := emr.NewClusterRunningWaiter(ec.Svc, func(o *emr.ClusterRunningWaiterOptions) {
 		o.MinDelay = launchPollMinDelay
 		o.MaxDelay = launchPollMaxDelay
-		o.Retryable = warnWhileBlind(jobflowID, o.Retryable)
+		o.Retryable = pollThroughBlindness(jobflowID, o.Retryable)
 	})
 
 	// WaitForOutput rather than Wait: it hands back the very DescribeCluster
@@ -720,7 +737,7 @@ func (ec EmrCluster) waitForClusterTerminated(ctx context.Context, jobflowID str
 	waiter := emr.NewClusterTerminatedWaiter(ec.Svc, func(o *emr.ClusterTerminatedWaiterOptions) {
 		o.MinDelay = launchPollMinDelay
 		o.MaxDelay = launchPollMaxDelay
-		o.Retryable = warnWhileBlind(jobflowID, o.Retryable)
+		o.Retryable = pollThroughBlindness(jobflowID, o.Retryable)
 	})
 
 	return waiter.Wait(ctx, input, clusterWaitMaxDuration)
@@ -747,12 +764,12 @@ func (ec EmrCluster) waitForClusterFinished(ctx context.Context, jobflowID strin
 	// all. It is, in clusterTerminatedStateRetryable — but a state matching no
 	// acceptor is simply polled again, so were that to change, every bootstrap
 	// failure would poll for transientMaxWaitDuration instead of being classified.
-	// The existence check that used to catch it directly is gone.
-	// TestWaitForClusterFinished_WithWaiter_Failure is the guard.
+	// TestWaitForClusterFinished_WithWaiter_Failure is the guard. (How the acceptor
+	// treats an API error no longer matters; see pollThroughBlindness.)
 	waiter := emr.NewClusterTerminatedWaiter(ec.Svc, func(o *emr.ClusterTerminatedWaiterOptions) {
 		o.MinDelay = jobPollMinDelay
 		o.MaxDelay = jobPollMaxDelay
-		o.Retryable = warnWhileBlind(jobflowID, o.Retryable)
+		o.Retryable = pollThroughBlindness(jobflowID, o.Retryable)
 	})
 
 	// As in waitForClusterReady, take the status from the waiter's own output so
